@@ -21,8 +21,12 @@ import (
 	"crypto/md5"
 	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/rongzer/blockchain/common/comm"
+	"github.com/rongzer/blockchain/peer/chain"
+	"github.com/rongzer/blockchain/peer/ledger"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -32,6 +36,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/rongzer/blockchain/common/conf"
 
 	"github.com/rongzer/blockchain/peer/broadcastclient"
 
@@ -45,27 +51,28 @@ import (
 	"github.com/rongzer/blockchain/protos/msp"
 	"github.com/rongzer/blockchain/protos/orderer"
 	pb "github.com/rongzer/blockchain/protos/peer"
-	"github.com/spf13/viper"
 )
 
 const (
-	QueryRBCCName       	string = "queryRBCCName"
+	QueryRBCCName           string = "queryRBCCName"
 	QueryStateHistory       string = "queryStateHistory"
-	QueryStateRList       	string = "queryStateRList"
-	SetModel       			string = "setModel"
-	GetModel       			string = "getModel"
-	DeleteModel       		string = "deleteModel"
-	GetModelList       		string = "getModelList"
-	SetTable       			string = "setTable"
-	DeleteTable       		string = "deleteTable"
-	GetTable       			string = "getTable"
-	GetTableList       		string = "getTableList"
+	QueryStateRList         string = "queryStateRList"
+	SetModel                string = "setModel"
+	GetModel                string = "getModel"
+	DeleteModel             string = "deleteModel"
+	GetModelList            string = "getModelList"
+	SetTable                string = "setTable"
+	DeleteTable             string = "deleteTable"
+	GetTable                string = "getTable"
+	GetTableList            string = "getTableList"
 	GetTableListWithPageCat string = "getTableListWithPageCat"
-	SetMainPublicKey       	string = "setMainPublicKey"
-	GetMainPublicKey       	string = "getMainPublicKey"
+	SetMainPublicKey        string = "setMainPublicKey"
+	GetMainPublicKey        string = "getMainPublicKey"
 	GetMainCryptogram       string = "getMainCryptogram"
-	GetFromHttp       		string = "getFromHttp"
-	GetAttach       		string = "getAttach"
+	GetFromHttp             string = "getFromHttp"
+	GetAttach               string = "getAttach"
+	RecordCryptoInfo        string = "recordCryptoInfo"
+	QueryCryptoInfo         string = "queryCryptoInfo"
 )
 
 type ModelDataStruct struct {
@@ -88,6 +95,8 @@ var chanModelDatas = struct {
 type RBCModel struct {
 	cryptoCache *cache.Cache
 	signFunc    plugin.Symbol
+
+	attachClient *comm.HttpClient
 }
 
 type RBCModelInfo struct {
@@ -176,6 +185,13 @@ type Cryto struct {
 
 type PUB_KEY struct {
 	PUB_KEY string `json:"PUB_KEY"` //PUB_KEY
+}
+
+type CryptoOpRecord struct {
+	OpTime     string `json:"opTime"`
+	MainId     string `json:"mainId"`
+	CustomerNo string `json:"customerNo"`
+	OpType     string `json:"opType"`
 }
 
 type pList []RBCTable
@@ -289,6 +305,7 @@ func (t *RBCModel) Init(_ shim.ChaincodeStubInterface) pb.Response {
 	defaultExpiration, _ := time.ParseDuration("1800s")
 	gcInterval, _ := time.ParseDuration("60s")
 	t.cryptoCache = cache.NewCache(defaultExpiration, gcInterval)
+	t.attachClient = comm.NewHttpClient()
 
 	return shim.Success(nil)
 }
@@ -447,7 +464,13 @@ func (t *RBCModel) Invoke(stub shim.ChaincodeStubInterface) pb.Response {
 			return shim.Error(fmt.Sprintf("Incorrect number of arguments Expecting %d", len(args)))
 		}
 		return t.getAttach(stub, string(args[2]))
-
+	case RecordCryptoInfo:
+		if len(args) < 3 {
+			return shim.Error("Incorrect number of arguments Expecting 3")
+		}
+		return t.recordCryptoInfo(stub, args[2])
+	case QueryCryptoInfo:
+		return t.queryCryptoInfo(stub)
 	default:
 		jsonResp := fmt.Sprintf("function %s is not found", f)
 		return shim.Error(jsonResp)
@@ -466,7 +489,7 @@ func (t *RBCModel) setModel(stub shim.ChaincodeStubInterface, modelInfo []byte) 
 		return shim.Error("rbcmodel name is empty")
 	}
 
-	customerEntity, err  := t.getCustomerEntity(stub)
+	customerEntity, err := t.getCustomerEntity(stub)
 	if err != nil {
 		return shim.Error(err.Error())
 	}
@@ -1140,7 +1163,7 @@ func (t *RBCModel) getMainPublicKey(stub shim.ChaincodeStubInterface, modelName,
 		}
 
 		rbcMessage.Data = reqBuf
-		res, err := broadcastclient.GetCommunicateOrderer().SendToOrderer(rbcMessage)
+		res, err := broadcastclient.GetCommunicateOrderer(conf.V.Sealer.Raft.EndPoint).SendToOrderer(rbcMessage)
 		if err != nil {
 			return shim.Error(fmt.Sprintf("create Main Publick ID Http err : %s", err))
 		}
@@ -1230,7 +1253,7 @@ func (t *RBCModel) getMainPublicKeyNew(stub shim.ChaincodeStubInterface, modelNa
 
 			rbcMessage := &common.RBCMessage{ChainID: cid, Type: 21}
 			rbcMessage.Data = reqBuf
-			res, err := broadcastclient.GetCommunicateOrderer().SendToOrderer(rbcMessage)
+			res, err := broadcastclient.GetCommunicateOrderer(conf.V.Sealer.Raft.EndPoint).SendToOrderer(rbcMessage)
 			if err != nil || res == nil {
 				return shim.Error(fmt.Sprintf("getMainPublicKeyNew create Main Publick ID Http err : %s", err))
 			}
@@ -1320,13 +1343,13 @@ func (t *RBCModel) getMainCryptogram(stub shim.ChaincodeStubInterface, modelName
 	envSign := ""
 
 	if t.signFunc != nil {
-		dockerHubDomain := viper.GetString("docker.hub.domain")
+		dockerHubDomain := conf.V.Peer.VM.Hub
 		if len(dockerHubDomain) < 10 {
 			dockerHubDomain = ""
 		} else {
 			dockerHubDomain = strings.TrimSpace(dockerHubDomain)
 		}
-		dockerImageTag := viper.GetString("docker.image.tag")
+		dockerImageTag := conf.V.Peer.VM.ImageTag
 		javaEnv := dockerHubDomain + "rongzer/blockchain-javaenv" + dockerImageTag
 
 		envSign = t.signFunc.(func(str, javaEnv string) string)(stub.GetTxID(), javaEnv)
@@ -1375,7 +1398,7 @@ func (t *RBCModel) getMainCryptogram(stub shim.ChaincodeStubInterface, modelName
 	rbcMessage.Data = reqBuf
 	pTime1 := time.Now().UnixNano() / 1000000
 
-	res, err := broadcastclient.GetCommunicateOrderer().SendToOrderer(rbcMessage)
+	res, err := broadcastclient.GetCommunicateOrderer(conf.V.Sealer.Raft.EndPoint).SendToOrderer(rbcMessage)
 	eTime := time.Now().UnixNano() / 1000000
 	if eTime-bTime > 500 {
 
@@ -1457,7 +1480,7 @@ func (t *RBCModel) getFromHttp(stub shim.ChaincodeStubInterface, url, param stri
 	}
 	rbcMessage.Data = reqBuf
 
-	res, err := broadcastclient.GetCommunicateOrderer().SendToOrderer(rbcMessage)
+	res, err := broadcastclient.GetCommunicateOrderer(conf.V.Sealer.Raft.EndPoint).SendToOrderer(rbcMessage)
 	if err != nil {
 		return shim.Error(fmt.Sprintf("getFromHttp from orderer err: %s", err))
 	}
@@ -1473,12 +1496,114 @@ func (t *RBCModel) getAttach(stub shim.ChaincodeStubInterface, key string) pb.Re
 		return shim.Error("clob key is empty")
 	}
 	rbcMessage.Data = []byte(key)
-
-	res, err := broadcastclient.GetCommunicateOrderer().SendToOrderer(rbcMessage)
-	if err != nil {
-		return shim.Error(fmt.Sprintf("getAttach from orderer err: %s", err))
+	var targetLedger ledger.PeerLedger
+	targetLedger = chain.GetLedger(chr.ChannelId)
+	if targetLedger == nil {
+		return shim.Error(fmt.Sprintf("Invalid chain ID, %s", chr.ChannelId))
 	}
-	return shim.Success(res.Data)
+
+	attach, err := targetLedger.GetAttachById(key)
+	if err != nil {
+		return shim.Error(err.Error())
+	}
+
+	hashChainUrl := conf.V.AttachServerAddress + "/getAttach"
+	if len(hashChainUrl) > 10 {
+		attachClob, err := t.getAttachFromServer(hashChainUrl, attach)
+		if err == nil {
+			return shim.Success(attachClob)
+		}
+	}
+
+	return shim.Success([]byte(attach))
+}
+
+func (t *RBCModel) getAttachFromServer(address string, hash string) ([]byte, error) {
+
+	httpRequest := &common.RBCHttpRequest{Method: "GET", Endpoint: address}
+	params := make(map[string]string)
+	params["key"] = hash
+	httpRequest.Params = params
+	resp, err := t.attachClient.Reqest(httpRequest)
+	if err != nil {
+		log.Logger.Error("get attach from server err : ", err)
+		return nil, err
+	}
+
+	var data map[string]string
+	err = json.Unmarshal(resp, &data)
+	if err != nil {
+		return nil, err
+	}
+
+	code := data["code"]
+	if code != "200" {
+		return nil, errors.New(string(resp))
+	}
+
+	attach := data["data"]
+
+	return []byte(attach), nil
+}
+
+// 记录加解密服务的调用信息
+func (t *RBCModel) recordCryptoInfo(stub shim.ChaincodeStubInterface, record []byte) pb.Response {
+	opRecord := &CryptoOpRecord{}
+	err := jsoniter.Unmarshal(record, opRecord)
+	if err != nil {
+		return shim.Error(fmt.Sprintf("args[2] parse to CryptoOpRecord has err %s", err))
+	}
+	txTime, _ := stub.GetTxTimestamp()
+	tm := time.Unix(txTime.Seconds, 0)
+	txTimeStr := tm.Format("2006-01-02 15:04:05")
+	opRecord.OpTime = txTimeStr
+	opRecordBytes, err := jsoniter.Marshal(opRecord)
+	if err != nil {
+		return shim.Error(fmt.Sprintf("CryptoOpRecord marshal to bytes err: %s", err))
+	}
+	// 构造key
+	key := opRecord.OpTime + "_" + opRecord.OpType + "_" + opRecord.MainId
+	if err := stub.PutState(key, opRecordBytes); err != nil {
+		return shim.Error(fmt.Sprintf("cannot put key:%s to state err: %s", key, err))
+	}
+	// 为key创建rlist索引
+	rlistName := "RecordLog"
+	stub.Add(rlistName, key)
+	return shim.Success([]byte("recordCryptoInfo success"))
+}
+
+// 查询加解密服务所有的调用记录，参考getModelList的实现，利用rlist
+func (t *RBCModel) queryCryptoInfo(stub shim.ChaincodeStubInterface) pb.Response {
+
+	rListName := "RecordLog"
+
+	nSize := stub.Size(rListName)
+	cpno := 1
+
+	listValue := make([]interface{}, 0)
+	pageList := &shim.PageList{Cpno: strconv.Itoa(cpno), Rnum: strconv.Itoa(nSize), List: listValue}
+
+	for i := 0; i < nSize; i++ {
+		existRecord := &CryptoOpRecord{}
+		recordKey := stub.Get(rListName, i)
+		if len(recordKey) == 0 {
+			continue
+		}
+		existBytes, err := stub.GetState(recordKey)
+		if err != nil {
+			continue
+		}
+		err = jsoniter.Unmarshal(existBytes, existRecord)
+		if err != nil {
+			continue
+		}
+		pageList.List = append(pageList.List, existRecord)
+	}
+	pageListBuf, err := jsoniter.Marshal(pageList)
+	if err != nil {
+		return shim.Error(fmt.Sprintf("queryCryptoInfo marshal to bytes err: %s", err))
+	}
+	return shim.Success(pageListBuf)
 }
 
 func (t *RBCModel) getCurrentPath() string {

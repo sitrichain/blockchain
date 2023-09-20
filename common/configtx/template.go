@@ -1,19 +1,3 @@
-/*
-Copyright IBM Corp. 2017 All Rights Reserved.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
-                 http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
-
 package configtx
 
 import (
@@ -26,11 +10,6 @@ import (
 	"github.com/rongzer/blockchain/common/util"
 	cb "github.com/rongzer/blockchain/protos/common"
 	"github.com/rongzer/blockchain/protos/utils"
-)
-
-const (
-	msgVersion = int32(0)
-	epoch      = 0
 )
 
 // Template can be used to facilitate creation of config transactions
@@ -265,7 +244,7 @@ func MakeChainCreationTransaction(channelID string, consortium string, signer ms
 		payloadSignatureHeader = utils.MakeSignatureHeader(sSigner, utils.CreateNonceOrPanic())
 	}
 
-	payloadChannelHeader := utils.MakeChannelHeader(cb.HeaderType_CONFIG_UPDATE, msgVersion, channelID, epoch)
+	payloadChannelHeader := utils.MakeChannelHeader(cb.HeaderType_CONFIG_UPDATE, channelID)
 	utils.SetTxID(payloadChannelHeader, payloadSignatureHeader)
 	payloadHeader := utils.MakePayloadHeader(payloadChannelHeader, payloadSignatureHeader)
 	payload := &cb.Payload{Header: payloadHeader, Data: utils.MarshalOrPanic(newConfigUpdateEnv)}

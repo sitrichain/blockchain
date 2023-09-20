@@ -1,0 +1,49 @@
+version: '2'
+
+services:
+  peer0.peer.com:
+    image: rongzer/blockchain-peer:develop
+    container_name: peer0.peer.com
+    restart: always
+    environment:
+      - BLOCKCHAIN_LOGLEVEL=INFO
+      - BLOCKCHAIN_TLS_ENABLED=true
+      - BLOCKCHAIN_TLS_PRIVATEKEY=/etc/rongzer/msp/peer/tls/server.key
+      - BLOCKCHAIN_TLS_CERTIFICATE=/etc/rongzer/msp/peer/tls/server.crt
+      - BLOCKCHAIN_TLS_ROOTCAS=/etc/rongzer/msp/peer/tls/ca.crt  #只设置一个路径即可，因为cryptogen生成的100个peer的tls/ca.crt都是相同的
+      - BLOCKCHAIN_TLS_CLIENTAUTHENABLED=false
+      - BLOCKCHAIN_TLS_CLIENTROOTCAS=
+      - BLOCKCHAIN_PEER_LISTENADDRESS=0.0.0.0:7051
+      - BLOCKCHAIN_PEER_MSPDIR=/etc/rongzer/msp/peer/msp
+      - BLOCKCHAIN_PEER_MSPID=RBCOrgMSP
+      - BLOCKCHAIN_SEALER_LISTENADDRESS=0.0.0.0:7050
+      - BLOCKCHAIN_SEALER_MSPDIR=/etc/rongzer/msp/sealer/msp
+      - BLOCKCHAIN_SEALER_MSPID=OrdererMSP
+      - BLOCKCHAIN_PEER_ID=peer0.peer.com
+      - BLOCKCHAIN_PEER_ENDPOINT=192.168.1.147:7051
+      - BLOCKCHAIN_PEER_VM_IMAGETAG=:develop
+      - BLOCKCHAIN_PEER_CHAINCODE_JAVADOCKERFILE=rongzer/blockchain-javaenv:develop
+      - BLOCKCHAIN_SEALER_GENESISFILE=/etc/rongzer/configtx/rbcorderer.block
+      - BLOCKCHAIN_SEALER_CAADDRESS=http://192.168.1.147:7054
+      - BLOCKCHAIN_SEALER_RAFT_ENDPOINT=192.168.1.147:7050
+      #- BLOCKCHAIN_SEALER_RAFT_BOOTSTRAPENDPOINT=192.168.1.146:7050   #raft集群的非first节点启动时，需要配置此项，值为集群中存活的任意节点地址；first节点启动时，不需要配置此项
+    command: peer
+    volumes:
+      - ./peers-config/peer0.peer.com/:/etc/rongzer/msp/peer:ro
+      - ./orderers-config/orderer0.orderer.com/:/etc/rongzer/msp/sealer:ro
+      - /var/rongzer/rbcdata/peer0:/var/rongzer/blockchain
+      - /var/run/:/var/run/
+      - ./:/etc/rongzer/configtx:ro
+      - ./peers-config/:/etc/rongzer/msp/peers:ro
+      - /etc/hosts:/etc/hosts  #开启tls验证时，需要使用宿主机的/etc/hosts文件，其中需要定义好ip地址和主机名的映射关系
+      - /etc/localtime:/etc/localtime
+    ports:
+      - 7051:7051
+      - 7053:7053
+      - 7050:7050
+
+  javaenv:
+    container_name: javaenv
+    image: rongzer/blockchain-javaenv:develop
+    restart: always
+    command: java -jar libs/shim-client-1.0.jar javaenv

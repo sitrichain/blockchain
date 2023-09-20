@@ -2,6 +2,9 @@ package server
 
 import (
 	"fmt"
+	"github.com/rongzer/blockchain/peer/ledger/kvledger"
+	"github.com/rongzer/blockchain/peer/ledger/ledgermgmt"
+	"github.com/rongzer/blockchain/peer/scc"
 	"io/ioutil"
 	"net"
 	"os"
@@ -12,21 +15,14 @@ import (
 	"time"
 
 	"github.com/rongzer/blockchain/common/comm"
-	"github.com/rongzer/blockchain/common/localmsp"
+	"github.com/rongzer/blockchain/common/conf"
 	"github.com/rongzer/blockchain/common/log"
-	"github.com/rongzer/blockchain/common/msp/mgmt"
 	"github.com/rongzer/blockchain/peer/chain"
 	"github.com/rongzer/blockchain/peer/chaincode"
 	"github.com/rongzer/blockchain/peer/common/ccprovider"
-	"github.com/rongzer/blockchain/peer/config"
 	"github.com/rongzer/blockchain/peer/endorser"
 	"github.com/rongzer/blockchain/peer/events/producer"
-	"github.com/rongzer/blockchain/peer/gossip/security"
-	"github.com/rongzer/blockchain/peer/gossip/service"
-	"github.com/rongzer/blockchain/peer/ledger/ledgermgmt"
-	"github.com/rongzer/blockchain/peer/scc"
 	pb "github.com/rongzer/blockchain/protos/peer"
-	"github.com/spf13/viper"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/grpclog"
 )
@@ -34,46 +30,57 @@ import (
 //function used by chaincode support
 type ccEndpointFunc func() (*pb.PeerEndpoint, error)
 
-//start chaincodes
-func initSysCCs() {
-	//deploy system chaincodes
-	scc.DeploySysCCs("")
-	log.Logger.Infof("Deployed system chaincodess")
+// GetSecureConfig returns the secure server configuration for the peer
+func GetSecureConfig() (comm.SecureServerConfig, error) {
+	secureConfig := comm.SecureServerConfig{
+		UseTLS: conf.V.TLS.Enabled,
+	}
+	if secureConfig.UseTLS {
+		// get the certs from the file system
+		serverKey, err := ioutil.ReadFile(conf.V.TLS.PrivateKey)
+		serverCert, err := ioutil.ReadFile(conf.V.TLS.Certificate)
+		// must have both key and cert file
+		if err != nil {
+			return secureConfig, fmt.Errorf("Error loading TLS key and/or certificate (%s)", err)
+		}
+		secureConfig.ServerCertificate = serverCert
+		secureConfig.ServerKey = serverKey
+		// check for root cert
+		if len(conf.V.TLS.RootCAs) > 0 {
+			rootCert, err := ioutil.ReadFile(conf.V.TLS.RootCAs[0])
+			if err != nil {
+				return secureConfig, fmt.Errorf("Error loading TLS root certificate (%s)", err)
+			}
+			secureConfig.ServerRootCAs = [][]byte{rootCert}
+		}
+		return secureConfig, nil
+	}
+	return secureConfig, nil
 }
 
-func Serve(chaincodeDevMode bool) error {
-	ledgermgmt.Initialize()
+func Serve() error {
 	// Parameter overrides must be processed before any parameters are
 	// cached. Failures to cache cause the server to terminate immediately.
-	if chaincodeDevMode {
+	if conf.V.Peer.Chaincode.Mode == chaincode.DevModeUserRunsChaincode {
 		log.Logger.Info("Running in chaincode development mode")
 		log.Logger.Info("Disable loading validity system chaincode")
-		viper.Set("chaincode.mode", chaincode.DevModeUserRunsChaincode)
 	}
 
-	if err := chain.CacheConfiguration(); err != nil {
-		return err
-	}
+	peerEndpoint := &pb.PeerEndpoint{Id: &pb.PeerID{Name: conf.V.Peer.ID}, Address: conf.V.Peer.Endpoint}
 
-	peerEndpoint, err := chain.GetPeerEndpoint()
-	if err != nil {
-		err = fmt.Errorf("Failed to get Peer Endpoint: %s", err)
-		return err
-	}
-
-	listenAddr := viper.GetString("peer.listenAddress")
-
-	secureConfig, err := chain.GetSecureConfig()
+	secureConfig, err := GetSecureConfig()
 	if err != nil {
 		log.Logger.Fatalf("Error loading secure config for peer (%s)", err)
+		return err
 	}
-	// 创建 peer service
-	peerServer, err := chain.CreatePeerServer(listenAddr, secureConfig)
+	// 创建交互模块的grpc service
+	peerServer, err := comm.NewGRPCServer(conf.V.Peer.ListenAddress, secureConfig)
 	if err != nil {
 		log.Logger.Fatalf("Failed to create peer server (%s)", err)
+		return err
 	}
 
-	log.Logger.Infof("peerServer listenAddr : %s", listenAddr)
+	log.Logger.Infof("peerServer listenAddr : %s", conf.V.Peer.ListenAddress)
 
 	if secureConfig.UseTLS {
 		log.Logger.Info("Starting peer with TLS enabled")
@@ -82,82 +89,45 @@ func Serve(chaincodeDevMode bool) error {
 		caSupport.ServerRootCAs = secureConfig.ServerRootCAs
 	}
 
-	// 创建 eventhub service
-	//TODO - do we need different SSL material for events ?
+	// 创建交互模块的eventhub service
 	ehubGrpcServer, err := createEventHubServer(secureConfig)
 	if err != nil {
 		grpclog.Fatalf("Failed to create ehub server: %v", err)
+		return err
 	}
 
-	log.Logger.Infof("ehubGrpcServer listenAddr : %s", viper.GetString("peer.events.address"))
+	log.Logger.Infof("eventhubServer listenAddr : %s", conf.V.Peer.Events.Address)
 
 	// enable the cache of chaincode info
 	ccprovider.EnableCCInfoCache()
 
-	// 创建 chaincode service
-	ccSrv, ccEpFunc := createChaincodeServer(peerServer, listenAddr)
+	// 创建交互模块的chaincode service
+	ccSrv, ccEpFunc := createChaincodeServer(peerServer, conf.V.Peer.ListenAddress)
 	registerChaincodeSupport(ccSrv.Server(), ccEpFunc)
 
-	log.Logger.Debugf("Running peer")
-
-	// Register the Endorser server
+	// 创建交互模块的Endorser server
 	serverEndorser := endorser.NewEndorserServer()
 	pb.RegisterEndorserServer(peerServer.Server(), serverEndorser)
 
-	// Initialize gossip component
-	bootstrap := viper.GetStringSlice("peer.gossip.bootstrap")
-
-	serializedIdentity, err := mgmt.GetLocalSigningIdentityOrPanic().Serialize()
-	if err != nil {
-		log.Logger.Panicf("Failed serializing self identity: %v", err)
-	}
-
-	// 初始化 msc 服务
-	messageCryptoService := security.NewMCS(
-		chain.NewChannelPolicyManagerGetter(),
-		localmsp.NewSigner(),
-		mgmt.NewDeserializersManager())
-	secAdv := security.NewSecurityAdvisor(mgmt.NewDeserializersManager())
-
-	// callback function for secure dial options for gossip service
-	secureDialOpts := func() []grpc.DialOption {
-		var dialOpts []grpc.DialOption
-		// set max send/recv msg sizes
-		dialOpts = append(dialOpts, grpc.WithDefaultCallOptions(grpc.MaxCallRecvMsgSize(comm.MaxRecvMsgSize()),
-			grpc.MaxCallSendMsgSize(comm.MaxSendMsgSize())))
-		// set the keepalive options
-		dialOpts = append(dialOpts, comm.ClientKeepaliveOptions(nil)...)
-
-		if comm.TLSEnabled() {
-			tlsCert := peerServer.ServerCertificate()
-			dialOpts = append(dialOpts, grpc.WithTransportCredentials(comm.GetCASupport().GetPeerCredentials(tlsCert)))
-		} else {
-			dialOpts = append(dialOpts, grpc.WithInsecure())
-		}
-		return dialOpts
-	}
-
-	// 初始化 gossip 服务
-	err = service.InitGossipService(serializedIdentity, peerEndpoint.Address, peerServer.Server(),
-		messageCryptoService, secAdv, secureDialOpts, bootstrap...)
-	if err != nil {
-		return err
-	}
-	defer service.GetGossipService().Stop()
-
 	go ccSrv.Start()
 
-	//initialize system chaincodes
-	initSysCCs()
-
-	//this brings up all the chains (including testchainid)
-	chain.Initialize(func(cid string) {
+	// 初始化所有链的系统链码
+	ledgerIds, err := ledgermgmt.GetLedgerIDs()
+	if err != nil {
+		log.Logger.Fatalf("Error in initializing ledgermgmt: %s", err)
+		return err
+	}
+	chainInitializer := func(cid string) {
 		log.Logger.Debugf("Deploying system CC, for chain <%s>", cid)
 		scc.DeploySysCCs(cid)
-	})
+	}
+	chain.SetChainInitializer(chainInitializer)
+	for _, cid := range ledgerIds {
+		chain.InitChain(cid)
+	}
 
 	log.Logger.Infof("Starting peer with ID=[%s], network ID=[%s], address=[%s]",
-		peerEndpoint.Id, viper.GetString("peer.networkId"), peerEndpoint.Address)
+		peerEndpoint.Id, conf.V.Peer.NetworkId, peerEndpoint.Address)
 
 	// Start the grpc server. Done in a goroutine so we can deploy the
 	// genesis block if needed.
@@ -182,7 +152,7 @@ func Serve(chaincodeDevMode bool) error {
 		serve <- grpcErr
 	}()
 
-	if err := writePid(config.GetPath("peer.fileSystemPath")+"/peer.pid", os.Getpid()); err != nil {
+	if err := writePid(conf.V.FileSystemPath+"/peer.pid", os.Getpid()); err != nil {
 		return err
 	}
 
@@ -192,7 +162,7 @@ func Serve(chaincodeDevMode bool) error {
 	}
 
 	log.Logger.Infof("Started peer with ID=[%s], network ID=[%s], address=[%s]",
-		peerEndpoint.Id, viper.GetString("peer.networkId"), peerEndpoint.Address)
+		peerEndpoint.Id, conf.V.Peer.NetworkId, peerEndpoint.Address)
 
 	// Block until grpc server exits
 	return <-serve
@@ -200,42 +170,12 @@ func Serve(chaincodeDevMode bool) error {
 
 //create a CC listener using peer.chaincodeListenAddress (and if that's not set use peer.peerAddress)
 func createChaincodeServer(peerServer comm.GRPCServer, peerListenAddress string) (comm.GRPCServer, ccEndpointFunc) {
-	cclistenAddress := viper.GetString("peer.chaincodeListenAddress")
-
 	var srv comm.GRPCServer
 	var ccEpFunc ccEndpointFunc
-
-	//use the chaincode address endpoint function..
-	//three cases
-	// -  peer.chaincodeListenAddress not specied (use peer's server)
-	// -  peer.chaincodeListenAddress identical to peer.listenAddress (use peer's server)
-	// -  peer.chaincodeListenAddress different and specified (create chaincode server)
-	if cclistenAddress == "" {
-		//...but log a warning
-		log.Logger.Warnf("peer.chaincodeListenAddress is not set, use peer.listenAddress %s", peerListenAddress)
-
-		//we are using peer address, use peer endpoint
-		ccEpFunc = chain.GetPeerEndpoint
-		srv = peerServer
-	} else if cclistenAddress == peerListenAddress {
-		//using peer's endpoint...log a  warning
-		log.Logger.Warnf("peer.chaincodeListenAddress is identical to peer.listenAddress %s", cclistenAddress)
-
-		//we are using peer address, use peer endpoint
-		ccEpFunc = chain.GetPeerEndpoint
-		srv = peerServer
-	} else {
-		c, err := chain.GetSecureConfig()
-		if err != nil {
-			panic(err)
-		}
-
-		srv, err = comm.NewGRPCServer(cclistenAddress, c)
-		if err != nil {
-			panic(err)
-		}
-		ccEpFunc = getChaincodeAddressEndpoint
+	ccEpFunc = func() (*pb.PeerEndpoint, error) {
+		return &pb.PeerEndpoint{Id: &pb.PeerID{Name: conf.V.Peer.ID}, Address: conf.V.Peer.Endpoint}, nil
 	}
+	srv = peerServer
 
 	return srv, ccEpFunc
 }
@@ -248,7 +188,7 @@ func registerChaincodeSupport(grpcServer *grpc.Server, ccEpFunc ccEndpointFunc) 
 	userRunsCC := chaincode.IsDevMode()
 
 	//get chaincode startup timeout
-	ccStartupTimeout := viper.GetDuration("chaincode.startuptimeout")
+	ccStartupTimeout := conf.V.Peer.Chaincode.Startuptimeout
 	if ccStartupTimeout < time.Duration(5)*time.Second {
 		log.Logger.Warnf("Invalid chaincode startup timeout value %s (should be at least 5s); defaulting to 5s", ccStartupTimeout)
 		ccStartupTimeout = time.Duration(5) * time.Second
@@ -257,39 +197,18 @@ func registerChaincodeSupport(grpcServer *grpc.Server, ccEpFunc ccEndpointFunc) 
 	}
 
 	ccSrv := chaincode.NewChaincodeSupport(ccEpFunc, userRunsCC, ccStartupTimeout)
-
+	// 在peer/ledger/kvledger包中标识theChaincodeSupport已初始化
+	kvledger.IsTheChaincodeSupportInitialized = true
 	//Now that chaincode is initialized, register all system chaincodes.
 	scc.RegisterSysCCs()
 
 	pb.RegisterChaincodeSupportServer(grpcServer, ccSrv)
 }
 
-func getChaincodeAddressEndpoint() (*pb.PeerEndpoint, error) {
-	//need this for the ID to create chaincode endpoint
-	peerEndpoint, err := chain.GetPeerEndpoint()
-	if err != nil {
-		return nil, err
-	}
-
-	ccendpoint := viper.GetString("peer.chaincodeListenAddress")
-	if ccendpoint == "" {
-		return nil, fmt.Errorf("peer.chaincodeListenAddress not specified")
-	}
-
-	if _, _, err = net.SplitHostPort(ccendpoint); err != nil {
-		return nil, err
-	}
-
-	return &pb.PeerEndpoint{
-		Id:      peerEndpoint.Id,
-		Address: ccendpoint,
-	}, nil
-}
-
 func createEventHubServer(secureConfig comm.SecureServerConfig) (comm.GRPCServer, error) {
 	var lis net.Listener
 	var err error
-	lis, err = net.Listen("tcp", viper.GetString("peer.events.address"))
+	lis, err = net.Listen("tcp", conf.V.Peer.Events.Address)
 	if err != nil {
 		return nil, fmt.Errorf("failed to listen: %v", err)
 	}
@@ -300,8 +219,8 @@ func createEventHubServer(secureConfig comm.SecureServerConfig) (comm.GRPCServer
 		return nil, err
 	}
 	ehServer := producer.NewEventsServer(
-		uint(viper.GetInt("peer.events.buffersize")),
-		viper.GetDuration("peer.events.timeout"))
+		uint(conf.V.Peer.Events.BufferSize),
+		conf.V.Peer.Events.Timeout)
 
 	pb.RegisterEventsServer(grpcServer.Server(), ehServer)
 	return grpcServer, nil

@@ -1,38 +1,25 @@
-/*
-Copyright IBM Corp. 2016 All Rights Reserved.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
-		 http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
-
 package consumer
 
 import (
+	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"fmt"
+	"io"
+	"io/ioutil"
+	"strings"
+	"sync"
+	"time"
+
 	"github.com/rongzer/blockchain/common/comm"
+	"github.com/rongzer/blockchain/common/conf"
 	"github.com/rongzer/blockchain/common/log"
 	mspmgmt "github.com/rongzer/blockchain/common/msp/mgmt"
-	"github.com/rongzer/blockchain/peer/config"
 	ehpb "github.com/rongzer/blockchain/protos/peer"
 	"github.com/rongzer/blockchain/protos/utils"
-	"github.com/spf13/viper"
 	"golang.org/x/net/context"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
-	"google.golang.org/grpc/grpclog"
-	"io"
-	"sync"
-	"time"
 )
 
 const defaultTimeout = time.Second * 3
@@ -74,21 +61,39 @@ func NewClientConnectionWithAddress(peerAddress string, block bool, tslEnabled b
 }
 
 // InitTLSForPeer returns TLS credentials for peer
-func InitTLSForPeer() credentials.TransportCredentials {
-	var sn string
-	if viper.GetString("peer.tls.serverhostoverride") != "" {
-		sn = viper.GetString("peer.tls.serverhostoverride")
-	}
+func InitTLSForPeer(peerAddress string) credentials.TransportCredentials {
 	var creds credentials.TransportCredentials
-	if config.GetPath("peer.tls.rootcert.file") != "" {
-		var err error
-		creds, err = credentials.NewClientTLSFromFile(config.GetPath("peer.tls.rootcert.file"), sn)
+	comm.InitMappingOfIpAndHost()
+	// 构造server rootCAs的池，以验证服务端的tls证书是否由合法ca签发
+	cp := x509.NewCertPool()
+	for _, file := range conf.V.TLS.RootCAs {
+		pem, err := ioutil.ReadFile(file)
 		if err != nil {
-			grpclog.Fatalf("Failed to create TLS credentials %v", err)
+			return nil
 		}
-	} else {
-		creds = credentials.NewClientTLSFromCert(nil, sn)
+		if !cp.AppendCertsFromPEM(pem) {
+			return nil
+		}
 	}
+	// 构造客户端自己的x509证书（服务端和客户端共用一套tls证书和私钥）
+	clientCertificate, err := ioutil.ReadFile(conf.V.TLS.Certificate)
+	if err != nil {
+		return nil
+	}
+	clientKey, err := ioutil.ReadFile(conf.V.TLS.PrivateKey)
+	if err != nil {
+		return nil
+	}
+	cert, err := tls.X509KeyPair(clientCertificate, clientKey)
+	if err != nil {
+		return nil
+	}
+	serverName := comm.GetHostNameFromIp(strings.Split(peerAddress, ":")[0])
+	creds = credentials.NewTLS(&tls.Config{
+		Certificates: []tls.Certificate{cert},
+		ServerName:   serverName,
+		RootCAs:      cp,
+	})
 	return creds
 }
 
@@ -108,7 +113,7 @@ func NewEventsClient(peerAddress string, regTimeout time.Duration, adapter Event
 //newEventsClientConnectionWithAddress Returns a new grpc.ClientConn to the configured local PEER.
 func newEventsClientConnectionWithAddress(peerAddress string) (*grpc.ClientConn, error) {
 	if comm.TLSEnabled() {
-		return NewClientConnectionWithAddress(peerAddress, true, true, InitTLSForPeer())
+		return NewClientConnectionWithAddress(peerAddress, true, true, InitTLSForPeer(peerAddress))
 	}
 	return NewClientConnectionWithAddress(peerAddress, true, false, nil)
 }
@@ -118,7 +123,7 @@ func (ec *EventsClient) send(emsg *ehpb.Event) error {
 	defer ec.Unlock()
 
 	// obtain the default signing identity for this peer; it will be used to sign the event
-	localMsp := mspmgmt.GetLocalMSP()
+	localMsp := mspmgmt.GetLocalMSPOfPeer()
 	if localMsp == nil {
 		return errors.New("nil local MSP manager")
 	}
@@ -288,7 +293,7 @@ func (ec *EventsClient) Stop() error {
 }
 
 func getCreatorFromLocalMSP() ([]byte, error) {
-	localMsp := mspmgmt.GetLocalMSP()
+	localMsp := mspmgmt.GetLocalMSPOfPeer()
 	if localMsp == nil {
 		return nil, errors.New("nil local MSP manager")
 	}

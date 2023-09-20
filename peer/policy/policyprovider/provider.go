@@ -32,7 +32,7 @@ type defaultFactory struct{}
 func (f *defaultFactory) NewPolicyChecker() policy.PolicyChecker {
 	return policy.NewPolicyChecker(
 		chain.NewChannelPolicyManagerGetter(),
-		mgmt.GetLocalMSP(),
+		mgmt.GetLocalMSPOfPeer(),
 		mgmt.NewLocalMSPPrincipalGetter(),
 	)
 }

@@ -2,13 +2,12 @@ package localconfig
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/rongzer/blockchain/common/log"
-	"github.com/rongzer/blockchain/common/viperutil"
-	cf "github.com/rongzer/blockchain/peer/config"
 	"github.com/spf13/viper"
 )
 
@@ -123,7 +122,7 @@ var genesisDefaults = TopLevel{
 // Load returns the orderer/application config combination that corresponds to a given profile.
 func Load(profile string) *Profile {
 	config := viper.New()
-	cf.InitViper(config, configName)
+	InitViper(config, configName)
 	config.SetConfigFile("./configtx.yaml")
 	// For environment variables
 	config.SetEnvPrefix(Prefix)
@@ -139,7 +138,7 @@ func Load(profile string) *Profile {
 	log.Logger.Debugf("Using config file: %s", config.ConfigFileUsed())
 
 	var uconf TopLevel
-	err = viperutil.EnhancedExactUnmarshal(config, &uconf)
+	err = EnhancedExactUnmarshal(config, &uconf)
 	if err != nil {
 		log.Logger.Panic("Error unmarshaling config into struct: ", err)
 	}
@@ -160,7 +159,7 @@ func Load(profile string) *Profile {
 // Load returns the orderer/application config combination that corresponds to a given profile.
 func OriginLoad(profile string) *Profile {
 	config := viper.New()
-	cf.InitViper(config, "sample-configtx")
+	InitViper(config, "sample-configtx")
 	err := config.ReadInConfig()
 	if err != nil {
 		log.Logger.Panic("Error reading configuration: ", err)
@@ -168,7 +167,7 @@ func OriginLoad(profile string) *Profile {
 	log.Logger.Debugf("Using config file: %s", config.ConfigFileUsed())
 
 	var uconf TopLevel
-	err = viperutil.EnhancedExactUnmarshal(config, &uconf)
+	err = EnhancedExactUnmarshal(config, &uconf)
 	if err != nil {
 		log.Logger.Panic("Error unmarshaling config into struct: ", err)
 	}
@@ -252,5 +251,153 @@ func (p *Profile) completeInitialization(configDir string) {
 }
 
 func translatePaths(configDir string, org *Organization) {
-	cf.TranslatePathInPlace(configDir, &org.MSPDir)
+	TranslatePathInPlace(configDir, &org.MSPDir)
+}
+
+func dirExists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
+}
+
+func addConfigPath(v *viper.Viper, p string) {
+	if v != nil {
+		v.AddConfigPath(p)
+	} else {
+		viper.AddConfigPath(p)
+	}
+}
+
+//----------------------------------------------------------------------------------
+// GetDevConfigDir()
+//----------------------------------------------------------------------------------
+// Returns the path to the default configuration that is maintained with the source
+// tree.  Only valid to call from a test/development context.
+//----------------------------------------------------------------------------------
+func GetDevConfigDir() (string, error) {
+	gopath := os.Getenv("GOPATH")
+	if gopath == "" {
+		return "", fmt.Errorf("GOPATH not set")
+	}
+
+	for _, p := range filepath.SplitList(gopath) {
+		devPath := filepath.Join(p, "src/github.com/rongzer/blockchain/sampleconfig")
+		if !dirExists(devPath) {
+			continue
+		}
+
+		return devPath, nil
+	}
+
+	return "", fmt.Errorf("DevConfigDir not found in %s", gopath)
+}
+
+//----------------------------------------------------------------------------------
+// TranslatePath()
+//----------------------------------------------------------------------------------
+// Translates a relative path into a fully qualified path relative to the config
+// file that specified it.  Absolute paths are passed unscathed.
+//----------------------------------------------------------------------------------
+func TranslatePath(base, p string) string {
+	if filepath.IsAbs(p) {
+		return p
+	}
+
+	return filepath.Join(base, p)
+}
+
+//----------------------------------------------------------------------------------
+// TranslatePathInPlace()
+//----------------------------------------------------------------------------------
+// Translates a relative path into a fully qualified path in-place (updating the
+// pointer) relative to the config file that specified it.  Absolute paths are
+// passed unscathed.
+//----------------------------------------------------------------------------------
+func TranslatePathInPlace(base string, p *string) {
+	*p = TranslatePath(base, *p)
+}
+
+//----------------------------------------------------------------------------------
+// GetPath()
+//----------------------------------------------------------------------------------
+// GetPath allows configuration strings that specify a (config-file) relative path
+//
+// For example: Assume our config is located in /etc/rongzer/blockchain/core.yaml with
+// a key "msp.configPath" = "msp/config.yaml".
+//
+// This function will return:
+//      GetPath("msp.configPath") -> /etc/rongzer/blockchain/msp/config.yaml
+//
+//----------------------------------------------------------------------------------
+func GetPath(key string) string {
+	p := viper.GetString(key)
+	if p == "" {
+		return ""
+	}
+
+	return TranslatePath(filepath.Dir(viper.ConfigFileUsed()), p)
+}
+
+const OfficialPath = "/etc/rongzer/blockchain"
+
+//----------------------------------------------------------------------------------
+// InitViper()
+//----------------------------------------------------------------------------------
+// Performs basic initialization of our viper-based configuration layer.
+// Primary thrust is to establish the paths that should be consulted to find
+// the configuration we need.  If v == nil, we will initialize the global
+// Viper instance
+//----------------------------------------------------------------------------------
+func InitViper(v *viper.Viper, configName string) error {
+	var altPath = os.Getenv("BLOCKCHAIN_CFG_PATH")
+	if altPath != "" {
+		// If the user has overridden the path with an envvar, its the only path
+		// we will consider
+		addConfigPath(v, altPath)
+	} else {
+		// If we get here, we should use the default paths in priority order:
+		//
+		// *) CWD
+		// *) The $GOPATH based development tree
+		// *) /etc/rongzer/blockchain
+		//
+
+		// CWD
+		addConfigPath(v, "./")
+
+		// DevConfigPath
+		err := AddDevConfigPath(v)
+		if err != nil {
+			return err
+		}
+
+		// And finally, the official path
+		if dirExists(OfficialPath) {
+			addConfigPath(v, OfficialPath)
+		}
+	}
+
+	// Now set the configuration file.
+	if v != nil {
+		v.SetConfigName(configName)
+	} else {
+		viper.SetConfigName(configName)
+	}
+
+	return nil
+}
+
+//----------------------------------------------------------------------------------
+// AddDevConfigPath()
+//----------------------------------------------------------------------------------
+// Helper utility that automatically adds our DevConfigDir to the viper path
+//----------------------------------------------------------------------------------
+func AddDevConfigPath(v *viper.Viper) error {
+	devPath, err := GetDevConfigDir()
+	if err != nil {
+		return err
+	}
+
+	addConfigPath(v, devPath)
+
+	return nil
 }

@@ -1,119 +1,32 @@
 package chain
 
 import (
-	"errors"
 	"fmt"
-	"net"
-	"strings"
-	"sync"
-	"time"
-
-	"github.com/rongzer/blockchain/common/comm"
-	"github.com/rongzer/blockchain/common/config"
-	"github.com/rongzer/blockchain/common/configtx"
-	configtxapi "github.com/rongzer/blockchain/common/configtx/config"
+	"github.com/rongzer/blockchain/common/crypto"
 	"github.com/rongzer/blockchain/common/log"
-	"github.com/rongzer/blockchain/common/msp"
-	mspmgmt "github.com/rongzer/blockchain/common/msp/mgmt"
-	"github.com/rongzer/blockchain/common/policies"
-	"github.com/rongzer/blockchain/peer/broadcastclient"
-	"github.com/rongzer/blockchain/peer/committer"
-	"github.com/rongzer/blockchain/peer/committer/txvalidator"
-	"github.com/rongzer/blockchain/peer/gossip/api"
-	"github.com/rongzer/blockchain/peer/gossip/service"
-	"github.com/rongzer/blockchain/peer/ledger"
-	"github.com/rongzer/blockchain/peer/ledger/ledgermgmt"
-	"github.com/rongzer/blockchain/protos/common"
-	pb "github.com/rongzer/blockchain/protos/peer"
+	"github.com/rongzer/blockchain/common/util"
+	"github.com/rongzer/blockchain/peer/consensus"
+	"github.com/rongzer/blockchain/peer/filters"
+	"github.com/rongzer/blockchain/peer/ledger/kvledger"
+	cb "github.com/rongzer/blockchain/protos/common"
 	"github.com/rongzer/blockchain/protos/utils"
-	"github.com/spf13/viper"
 )
 
-var peerServer comm.GRPCServer
-
-// singleton instance to manage CAs for the peer across channel config changes
-var rootCASupport = comm.GetCASupport()
-
-type chainSupport struct {
-	configtxapi.Manager
-	config.Application
-	ledger ledger.PeerLedger
-	broadcastclient.CommunicateOrderer
+// Chain 链结构中包含了支撑一条链所需的资源
+type Chain struct {
+	*LedgerResources
+	Consenter       consensus.Consenter
+	cutter          *consensus.Cutter
+	filters         filters.Set
+	signer          crypto.LocalSigner
+	lastConfigIndex uint64
+	lastConfigSeq   uint64
 }
-
-func (cs *chainSupport) Ledger() ledger.PeerLedger {
-	return cs.ledger
-}
-
-func (cs *chainSupport) GetMSPIDs(cid string) []string {
-	return GetMSPIDs(cid)
-}
-
-// chain is a local struct to manage objects in a chain
-type chain struct {
-	cs        *chainSupport
-	cb        *common.Block
-	committer committer.Committer
-}
-
-// chains is a local map of chainID->chainObject
-var chains = struct {
-	sync.RWMutex
-	list map[string]*chain
-}{list: make(map[string]*chain)}
 
 var chainInitializer func(string)
 
-func ChainsInit() {
-	chains.list = nil
-	chains.list = make(map[string]*chain)
-	chainInitializer = func(string) { return }
-}
-
-func AddChain(cid string, ledger ledger.PeerLedger, manager configtxapi.Manager) {
-	chains.Lock()
-	defer chains.Unlock()
-
-	chains.list[cid] = &chain{
-		cs: &chainSupport{
-			Manager: manager,
-			ledger:  ledger},
-	}
-}
-
-// Initialize sets up any chains that the peer has from the persistence. This
-// function should be called at the start up when the ledger and gossip
-// ready
-func Initialize(init func(string)) {
-	chainInitializer = init
-	var cb *common.Block
-	ledgermgmt.Initialize()
-	ledgerIds, err := ledgermgmt.GetLedgerIDs()
-	if err != nil {
-		panic(fmt.Errorf("Error in initializing ledgermgmt: %s", err))
-	}
-	for _, cid := range ledgerIds {
-		log.Logger.Infof("Loading chain %s", cid)
-		ldger, err := ledgermgmt.OpenLedger(cid)
-		if err != nil {
-			log.Logger.Warnf("Failed to load ledger %s(%s)", cid, err)
-			log.Logger.Debugf("Error while loading ledger %s with message %s. We continue to the next ledger rather than abort.", cid, err)
-			continue
-		}
-		if cb, err = getCurrConfigBlockFromLedger(ldger); err != nil {
-			log.Logger.Warnf("Failed to find config block on ledger %s(%s)", cid, err)
-			log.Logger.Debugf("Error while looking for config block on ledger %s with message %s. We continue to the next ledger rather than abort.", cid, err)
-			continue
-		}
-		// Create a chain if we get a valid ledger with config block
-		if err = createChain(cid, ldger, cb); err != nil {
-			log.Logger.Warnf("Failed to load chain %s(%s)", cid, err)
-			log.Logger.Debugf("Error reloading chain %s with message %s. We continue to the next chain rather than abort.", cid, err)
-			continue
-		}
-
-		InitChain(cid)
-	}
+func SetChainInitializer(f func(string)) {
+	chainInitializer = f
 }
 
 // Take care to initialize chain after peer joined, for example deploys system CCs
@@ -125,416 +38,232 @@ func InitChain(cid string) {
 	}
 }
 
-func getCurrConfigBlockFromLedger(ledger ledger.PeerLedger) (*common.Block, error) {
-	log.Logger.Debugf("Getting config block")
+// 创建链
+func newChain(set filters.Set, ledgerResources *LedgerResources, consenter consensus.Mode, signer crypto.LocalSigner) (*Chain, error) {
+	c := &Chain{
+		LedgerResources: ledgerResources,
+		cutter:          consensus.NewCutter(ledgerResources.SharedConfig(), set),
+		filters:         set,
+		signer:          signer,
+		lastConfigSeq:   ledgerResources.Sequence(),
+	}
 
-	// get last block.  Last block number is Height-1
-	blockchainInfo, err := ledger.GetBlockchainInfo()
+	lastBlock, err := c.GetBlockByNumber(c.Ledger().Height() - 1)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("[chain: %s] Error get last block from block metadata: %w", c.ChainID(), err)
 	}
-	lastBlock, err := ledger.GetBlockByNumber(blockchainInfo.Height - 1)
-	if err != nil {
-		return nil, err
-	}
-
-	// get most recent config block location from last block metadata
-	configBlockIndex, err := utils.GetLastConfigIndexFromBlock(lastBlock)
-	if err != nil {
-		return nil, err
-	}
-
-	// get most recent config block
-	configBlock, err := ledger.GetBlockByNumber(configBlockIndex)
-	if err != nil {
-		return nil, err
-	}
-
-	log.Logger.Debugf("Got config block[%d]", configBlockIndex)
-	return configBlock, nil
-}
-
-// createChain creates a new chain object and insert it into the chains
-func createChain(cid string, ledger ledger.PeerLedger, cb *common.Block) error {
-
-	envelopeConfig, err := utils.ExtractEnvelope(cb, 0)
-	if err != nil {
-		return err
-	}
-
-	configtxInitializer := configtx.NewInitializer()
-
-	gossipEventer := service.GetGossipService().NewConfigEventer()
-
-	gossipCallbackWrapper := func(cm configtxapi.Manager) {
-		ac, ok := configtxInitializer.ApplicationConfig()
-		if !ok {
-			// TODO, handle a missing ApplicationConfig more gracefully
-			ac = nil
-		}
-		gossipEventer.ProcessConfigUpdate(&chainSupport{
-			Manager:     cm,
-			Application: ac,
-		})
-		service.GetGossipService().SuspectPeers(func(identity api.PeerIdentityType) bool {
-			// TODO: this is a place-holder that would somehow make the MSP layer suspect
-			// that a given certificate is revoked, or its intermediate CA is revoked.
-			// In the meantime, before we have such an ability, we return true in order
-			// to suspect ALL identities in order to validate all of them.
-			return true
-		})
-	}
-
-	trustedRootsCallbackWrapper := func(cm configtxapi.Manager) {
-		updateTrustedRoots(cm)
-	}
-
-	configtxManager, err := configtx.NewConfigManager(
-		envelopeConfig,
-		configtxInitializer,
-		[]func(cm configtxapi.Manager){gossipCallbackWrapper, trustedRootsCallbackWrapper},
-	)
-	if err != nil {
-		return err
-	}
-
-	// TODO remove once all references to mspmgmt are gone from peer code
-	mspmgmt.XXXSetMSPManager(cid, configtxManager.MSPManager())
-
-	// 创建bradcastClient
-
-	bc := broadcastclient.NewBroadcastClient()
-
-	ac, ok := configtxInitializer.ApplicationConfig()
-	if !ok {
-		ac = nil
-	}
-	cs := &chainSupport{
-		Manager:            configtxManager,
-		Application:        ac, // TODO, refactor as this is accessible through Manager
-		ledger:             ledger,
-		CommunicateOrderer: bc,
-	}
-
-	c := committer.NewLedgerCommitterReactive(ledger, txvalidator.NewTxValidator(cs), func(block *common.Block) error {
-		chainID, err := utils.GetChainIDFromBlock(block)
+	// 如果最新的块不是创世块, 则不存在lastconfig字段
+	if lastBlock.Header.Number != 0 {
+		lastConfigIndex, err := utils.GetLastConfigIndexFromBlock(lastBlock)
 		if err != nil {
-			return err
+			return nil, fmt.Errorf("[chain: %s] Error extracting last config block from block metadata: %w", c.ChainID(), err)
 		}
-		return SetCurrConfigBlock(block, chainID)
-	})
-
-	ordererAddresses := configtxManager.ChannelConfig().OrdererAddresses()
-	if len(ordererAddresses) == 0 {
-		return errors.New("No ordering service endpoint provided in configuration block")
+		c.lastConfigIndex = lastConfigIndex
 	}
-	// 重载orderer地址配置
-	ordererAddress := viper.GetString("orderer.address")
-	if len(ordererAddress) > 0 {
-		ordererAddresses = strings.Split(ordererAddress, ",")
-	}
-	service.GetGossipService().InitializeChannel(cs.ChainID(), c, ordererAddresses)
-
-	chains.Lock()
-	defer chains.Unlock()
-	chains.list[cid] = &chain{
-		cs:        cs,
-		cb:        cb,
-		committer: c,
-	}
-
-	// 在这启动定时器向orderer发消息
-	go sendOrdererTimer(cs.ChainID())
-	return nil
-}
-
-// CreateChainFromBlock creates a new chain from config block
-func CreateChainFromBlock(cb *common.Block) error {
-	cid, err := utils.GetChainIDFromBlock(cb)
-	if err != nil {
-		return err
-	}
-
-	var l ledger.PeerLedger
-	if l, err = ledgermgmt.CreateLedger(cb); err != nil {
-		return fmt.Errorf("Cannot create ledger from genesis block, due to %s", err)
-	}
-
-	return createChain(cid, l, cb)
-}
-
-// GetLedger returns the ledger of the chain with chain ID. Note that this
-// call returns nil if chain cid has not been created.
-func GetLedger(cid string) ledger.PeerLedger {
-	chains.RLock()
-	defer chains.RUnlock()
-	if c, ok := chains.list[cid]; ok {
-		return c.cs.ledger
-	}
-	return nil
-}
-
-// GetPolicyManager returns the policy manager of the chain with chain ID. Note that this
-// call returns nil if chain cid has not been created.
-func GetPolicyManager(cid string) policies.Manager {
-	chains.RLock()
-	defer chains.RUnlock()
-	if c, ok := chains.list[cid]; ok {
-		return c.cs.PolicyManager()
-	}
-	return nil
-}
-
-// GetCurrConfigBlock returns the cached config block of the specified chain.
-// Note that this call returns nil if chain cid has not been created.
-func GetCurrConfigBlock(cid string) *common.Block {
-	chains.RLock()
-	defer chains.RUnlock()
-	if c, ok := chains.list[cid]; ok {
-		return c.cb
-	}
-	return nil
-}
-
-// updates the trusted roots for the peer based on updates to channels
-func updateTrustedRoots(cm configtxapi.Manager) {
-	// this is triggered on per channel basis so first update the roots for the channel
-	log.Logger.Debugf("Updating trusted root authorities for channel %s", cm.ChainID())
-	var secureConfig comm.SecureServerConfig
-	var err error
-	// only run is TLS is enabled
-	secureConfig, err = GetSecureConfig()
-	if err == nil && secureConfig.UseTLS {
-		buildTrustedRootsForChain(cm)
-
-		// now iterate over all roots for all app and orderer chains
-		var trustedRoots [][]byte
-		rootCASupport.RLock()
-		defer rootCASupport.RUnlock()
-		for _, roots := range rootCASupport.AppRootCAsByChain {
-			trustedRoots = append(trustedRoots, roots...)
-		}
-		// also need to append statically configured root certs
-		if len(secureConfig.ClientRootCAs) > 0 {
-			trustedRoots = append(trustedRoots, secureConfig.ClientRootCAs...)
-		}
-		if len(secureConfig.ServerRootCAs) > 0 {
-			trustedRoots = append(trustedRoots, secureConfig.ServerRootCAs...)
-		}
-
-		server := GetPeerServer()
-		// now update the client roots for the peerServer
-		if server != nil {
-			err := server.SetClientRootCAs(trustedRoots)
-			if err != nil {
-				msg := "Failed to update trusted roots for peer from latest config " +
-					"block.  This peer may not be able to communicate " +
-					"with members of channel %s (%s)"
-				log.Logger.Warnf(msg, cm.ChainID(), err)
-			}
-		}
-	}
-}
-
-// populates the appRootCAs and orderRootCAs maps by getting the
-// root and intermediate certs for all msps associated with the MSPManager
-func buildTrustedRootsForChain(cm configtxapi.Manager) {
-	rootCASupport.Lock()
-	defer rootCASupport.Unlock()
-
-	var appRootCAs [][]byte
-	var ordererRootCAs [][]byte
-	appOrgMSPs := make(map[string]struct{})
-	ac, ok := cm.ApplicationConfig()
-	if ok {
-		//loop through app orgs and build map of MSPIDs
-		for _, appOrg := range ac.Organizations() {
-			appOrgMSPs[appOrg.MSPID()] = struct{}{}
-		}
-	}
-
-	cid := cm.ChainID()
-	log.Logger.Debugf("updating root CAs for channel [%s]", cid)
-	msps, err := cm.MSPManager().GetMSPs()
-	if err != nil {
-		log.Logger.Errorf("Error getting root CAs for channel %s (%s)", cid, err)
-	}
-	if err == nil {
-		for k, v := range msps {
-			// check to see if this is a BLOCKCHAIN MSP
-			if v.GetType() == msp.BLOCKCHAIN {
-				for _, root := range v.GetTLSRootCerts() {
-					// check to see of this is an app org MSP
-					if _, ok := appOrgMSPs[k]; ok {
-						log.Logger.Debugf("adding app root CAs for MSP [%s]", k)
-						appRootCAs = append(appRootCAs, root)
-					} else {
-						log.Logger.Debugf("adding orderer root CAs for MSP [%s]", k)
-						ordererRootCAs = append(ordererRootCAs, root)
-					}
-				}
-				for _, intermediate := range v.GetTLSIntermediateCerts() {
-					// check to see of this is an app org MSP
-					if _, ok := appOrgMSPs[k]; ok {
-						log.Logger.Debugf("adding app root CAs for MSP [%s]", k)
-						appRootCAs = append(appRootCAs, intermediate)
-					} else {
-						log.Logger.Debugf("adding orderer root CAs for MSP [%s]", k)
-						ordererRootCAs = append(ordererRootCAs, intermediate)
-					}
-				}
-			}
-		}
-		rootCASupport.AppRootCAsByChain[cid] = appRootCAs
-		rootCASupport.OrdererRootCAsByChain[cid] = ordererRootCAs
-	}
-}
-
-// GetMSPIDs returns the ID of each application MSP defined on this chain
-func GetMSPIDs(cid string) []string {
-	chains.RLock()
-	defer chains.RUnlock()
-
-	if c, ok := chains.list[cid]; ok {
-		if c == nil || c.cs == nil {
-			return nil
-		}
-		ac, ok := c.cs.ApplicationConfig()
-		if !ok || ac.Organizations() == nil {
-			return nil
-		}
-
-		orgs := ac.Organizations()
-		toret := make([]string, len(orgs))
-		i := 0
-		for _, org := range orgs {
-			toret[i] = org.MSPID()
-			i++
-		}
-
-		return toret
-	}
-	return nil
-}
-
-// SetCurrConfigBlock sets the current config block of the specified chain
-func SetCurrConfigBlock(block *common.Block, cid string) error {
-	chains.Lock()
-	defer chains.Unlock()
-	if c, ok := chains.list[cid]; ok {
-		c.cb = block
-		return nil
-	}
-	return fmt.Errorf("Chain %s doesn't exist on the peer", cid)
-}
-
-// GetLocalIP returns the non loopback local IP of the host
-func GetLocalIP() string {
-	addrs, err := net.InterfaceAddrs()
-	if err != nil {
-		return ""
-	}
-	for _, address := range addrs {
-		// check the address type and if it is not a loopback then display it
-		if ipnet, ok := address.(*net.IPNet); ok && !ipnet.IP.IsLoopback() {
-			if ipnet.IP.To4() != nil {
-				return ipnet.IP.String()
-			}
-		}
-	}
-	return ""
-}
-
-// GetChannelsInfo returns an array with information about all channels for
-// this peer
-func GetChannelsInfo() []*pb.ChannelInfo {
-	// array to store metadata for all channels
-	var channelInfoArray []*pb.ChannelInfo
-
-	chains.RLock()
-	defer chains.RUnlock()
-	for key := range chains.list {
-		channelInfo := &pb.ChannelInfo{ChannelId: key}
-
-		// add this specific chaincode's metadata to the array of all chaincodes
-		channelInfoArray = append(channelInfoArray, channelInfo)
-	}
-
-	return channelInfoArray
-}
-
-// NewChannelPolicyManagerGetter returns a new instance of ChannelPolicyManagerGetter
-func NewChannelPolicyManagerGetter() policies.ChannelPolicyManagerGetter {
-	return &channelPolicyManagerGetter{}
-}
-
-type channelPolicyManagerGetter struct{}
-
-func (c *channelPolicyManagerGetter) Manager(channelID string) (policies.Manager, bool) {
-	policyManager := GetPolicyManager(channelID)
-	return policyManager, policyManager != nil
-}
-
-// CreatePeerServer creates an instance of comm.GRPCServer
-// This server is used for peer communications
-func CreatePeerServer(listenAddress string,
-	secureConfig comm.SecureServerConfig) (comm.GRPCServer, error) {
-
-	var err error
-	peerServer, err = comm.NewGRPCServer(listenAddress, secureConfig)
-	if err != nil {
-		log.Logger.Errorf("Failed to create peer server (%s)", err)
-		return nil, err
-	}
-	return peerServer, nil
-}
-
-// GetPeerServer returns the peer server instance
-func GetPeerServer() comm.GRPCServer {
-	return peerServer
-}
-
-// 发送消息至orderer
-func sendOrdererTimer(channelID string) {
-	timer1 := time.NewTicker(5 * time.Second)
-	id := viper.GetString("peer.id")
-	address := viper.GetString("peer.address")
-	for {
-		select {
-		case <-timer1.C:
-			sendOrdererTimerFunc(channelID, id, address)
-		}
-	}
-}
-
-func sendOrdererTimerFunc(channelID, id, address string) {
-	go func() {
-		peerInfo := &common.PeerInfo{}
-		peerInfo.Id = id
-		peerInfo.Address = address
-
-		targetLedger := GetLedger(channelID)
-
-		binfo, err := targetLedger.GetBlockchainInfo()
+	if consenter != nil {
+		// 获取元数据
+		metadata, err := utils.GetMetadataFromBlock(lastBlock, cb.BlockMetadataIndex_ORDERER)
 		if err != nil {
-			log.Logger.Errorf("Failed to get block info with error %s", err)
-		} else {
-			peerInfo.BlockInfo = binfo
+			return nil, fmt.Errorf("[chain: %s] Error extracting orderer metadata: %w", c.ChainID(), err)
 		}
-
-		buf, err := peerInfo.Marshal()
+		log.Logger.Infof("[chain: %s] Get metadata (blockNumber=%d, lastConfigIndex=%d, lastConfigSeq=%d): %s", c.ChainID(), lastBlock.Header.Number, c.lastConfigIndex, c.lastConfigSeq, metadata.Value)
+		// 创建链的共识器
+		c.Consenter, err = consenter.NewConsenter(c, metadata)
 		if err != nil {
-			log.Logger.Errorf("marshal peerinfo error: %s ", err)
-			return
+			return nil, fmt.Errorf("Error creating Consenter of chain: %s: %w", c.ChainID(), err)
 		}
+	}
+	return c, nil
+}
 
-		rbcMessage := &common.RBCMessage{ChainID: channelID, Type: 11, Data: buf}
-		_, err = broadcastclient.GetCommunicateOrderer().SendToOrderer(rbcMessage)
-		if err != nil {
-			log.Logger.Errorf("send peer status info message To Orderer error: %s", err)
-			return
-		}
+// 启动链的共识器
+func (c *Chain) Start() {
+	c.Consenter.Start()
+}
 
-		log.Logger.Debugf("[Chain: %s] Send peer status info message To Orderer", channelID)
-	}()
+// NewSignatureHeader 创建签名头
+func (c *Chain) NewSignatureHeader() (*cb.SignatureHeader, error) {
+	return c.signer.NewSignatureHeader()
+}
+
+// Sign 对数据签名
+func (c *Chain) Sign(message []byte) ([]byte, error) {
+	return c.signer.Sign(message)
+}
+
+// Filters 获取链的过滤器集合
+func (c *Chain) Filters() filters.Set {
+	return c.filters
+}
+
+// BlockCutter 获取链的切块对象
+func (c *Chain) BlockCutter() *consensus.Cutter {
+	return c.cutter
+}
+
+// Ledger 获取链的账本
+func (c *Chain) Ledger() *kvledger.SignaledLedger {
+	return c.ledger
+}
+
+// Order 接收消息进入队列
+func (c *Chain) Enqueue(env *cb.Envelope, committer filters.Committer) bool {
+	return c.Consenter.Order(env, committer)
+}
+
+// Errored 获取链共识器的错误通道
+func (c *Chain) Errored() <-chan struct{} {
+	return c.Consenter.Errored()
+}
+
+// Height 获取账本的块高度
+func (c *Chain) Height() uint64 {
+	return c.Ledger().Height()
+}
+
+// GetBlockchainInfo 获取账本的基本信息
+func (c *Chain) GetBlockchainInfo() (*cb.BlockchainInfo, error) {
+	return c.ledger.GetBlockchainInfo()
+}
+
+// GetBlockByNumber 获取指定高度的块, 传入math.MaxUint64可获取最新的块
+func (c *Chain) GetBlockByNumber(blockNumber uint64) (*cb.Block, error) {
+	return c.ledger.GetBlockByNumber(blockNumber)
+}
+
+// GetBlockByHash 获取指定哈希的块
+func (c *Chain) GetBlockByHash(blockHash []byte) (*cb.Block, error) {
+	return c.ledger.GetBlockByHash(blockHash)
+}
+
+// GetBlockByTxID 获取包含指定交易的块
+func (c *Chain) GetBlockByTxID(txID string) (*cb.Block, error) {
+	return c.ledger.GetBlockByTxID(txID)
+}
+
+// GetTxByID 获取指定交易ID的交易
+func (c *Chain) GetTxByID(txID string) (*cb.Envelope, error) {
+	return c.ledger.GetTxByID(txID)
+}
+
+// GetAttach 获取附件数据
+func (c *Chain) GetAttach(attachKey string) string {
+	return c.ledger.GetAttach(attachKey)
+}
+
+// WriteBlock 写入块数据(且更新块的元数据)
+func (c *Chain) WriteBlock(block *cb.Block, encodedMetadataValue []byte) *cb.Block {
+	// 针对raft共识下对不同类型交易（配置更新、创建链、合约业务）的处理
+	configEnv, txType, ableToCreateChain, err := utils.GetConfigEnvelopeFromBlock(block)
+	// 创建链交易
+	if txType == 4 && ableToCreateChain {
+		manager.NewChain(configEnv)
+	}
+	// 其他两类交易不进行任何处理
+	if txType == 1 || err != nil {
+		log.Logger.Debugf("nothing to do for this kind of transaction: %v", txType)
+	}
+
+	// 写入orderer相关的元数据
+	if encodedMetadataValue != nil {
+		block.Metadata.Metadata[cb.BlockMetadataIndex_ORDERER] = utils.MarshalOrPanic(&cb.Metadata{Value: encodedMetadataValue})
+	}
+	// 写入签名
+	c.addBlockSignature(block)
+	// 写入最新配置块索引
+	c.addLastConfigIndex(block)
+	// 块数据入账本
+	if err := c.ledger.Append(block); err != nil {
+		log.Logger.Panicf("[chain: %s] Could not append block: %s", c.ChainID(), err)
+	}
+	log.Logger.Debugf("[chain: %s] Wrote block %d", c.ChainID(), block.GetHeader().Number)
+
+	return block
+}
+
+// 添加块签名
+func (c *Chain) addBlockSignature(block *cb.Block) {
+	// 创建签名头并序列化
+	if c.signer == nil {
+		panic("Invalid signer. Must be different from nil.")
+	}
+	signatureHeader, err := c.signer.NewSignatureHeader()
+	if err != nil {
+		panic(err)
+	}
+	headerBytes, err := signatureHeader.Marshal()
+	if err != nil {
+		panic(err)
+	}
+
+	// 对签名头+块头签名
+	s, err := c.signer.Sign(util.ConcatenateBytes(headerBytes, block.Header.Bytes()))
+	if err != nil {
+		panic(err)
+	}
+
+	// 序列化元数据项
+	md := &cb.Metadata{
+		Value:      []byte(nil), // 该值故意为空，因为此元数据仅与签名有关，不需要其他元数据信息
+		Signatures: []*cb.MetadataSignature{{SignatureHeader: headerBytes, Signature: s}},
+	}
+	m, err := md.Marshal()
+	if err != nil {
+		panic(err)
+	}
+
+	// 写入元数据项到块中
+	block.Metadata.Metadata[cb.BlockMetadataIndex_SIGNATURES] = m
+}
+
+// 写入最新配置块索引及签名
+func (c *Chain) addLastConfigIndex(block *cb.Block) {
+	// 创建签名头并序列化
+	if c.signer == nil {
+		panic("Invalid signer. Must be different from nil.")
+	}
+	signatureHeader, err := c.signer.NewSignatureHeader()
+	if err != nil {
+		panic(err)
+	}
+	headerBytes, err := signatureHeader.Marshal()
+	if err != nil {
+		panic(err)
+	}
+
+	// 获取当前最新配置序号, 如果比之前的记录新则更新序号及块号
+	seq := c.Sequence()
+	if seq > c.lastConfigSeq {
+		log.Logger.Debugf("[chain: %s] Detected lastConfigSeq transitioning from %d to %d, setting lastConfigIndex from %d to %d", c.ChainID(), c.lastConfigSeq, seq, c.lastConfigIndex, block.Header.Number)
+		c.lastConfigIndex = block.Header.Number
+		c.lastConfigSeq = seq
+	}
+
+	log.Logger.Debugf("[chain: %s] About to write block, setting its LAST_CONFIG to %d", c.ChainID(), c.lastConfigIndex)
+
+	// 序列化配置索引数据
+	conf := &cb.LastConfig{Index: c.lastConfigIndex}
+	confBytes, err := conf.Marshal()
+	if err != nil {
+		panic(err)
+	}
+
+	// 对配置数据+签名头+块头签名
+	s, err := c.signer.Sign(util.ConcatenateBytes(confBytes, headerBytes, block.Header.Bytes()))
+	if err != nil {
+		panic(err)
+	}
+
+	// 序列化元数据项
+	md := &cb.Metadata{
+		Value:      confBytes,
+		Signatures: []*cb.MetadataSignature{{SignatureHeader: headerBytes, Signature: s}},
+	}
+	m, err := md.Marshal()
+	if err != nil {
+		panic(err)
+	}
+
+	// 写入元数据项到块中
+	block.Metadata.Metadata[cb.BlockMetadataIndex_LAST_CONFIG] = m
 }

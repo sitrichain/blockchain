@@ -4,7 +4,6 @@
 #   - configtxgen - builds a native configtxgen binary
 #   - cryptogen  -  builds a native cryptogen binary
 #   - peer - builds a native fabric peer binary
-#   - orderer - builds a native fabric orderer binary
 #   - clean - cleans the build area
 
 PROJECT_NAME = rongzer/blockchain
@@ -64,14 +63,12 @@ PROJECT_FILES = $(shell git ls-files  | grep -v ^test | grep -v ^unit-test | \
 	grep -v ^LICENSE )
 RELEASE_TEMPLATES = $(shell git ls-files | grep "release/templates")
 
-IMAGES = peer light orderer javaenv
+IMAGES = peer javaenv
 
 RELEASE_PLATFORMS = windows-amd64 darwin-amd64 linux-amd64 linux-ppc64le linux-s390x
-RELEASE_PKGS = peer orderer light
+RELEASE_PKGS = peer
 
 pkgmap.peer           := $(PKGNAME)/peer
-pkgmap.light          := $(PKGNAME)/light
-pkgmap.orderer        := $(PKGNAME)/orderer
 
 ifneq ($(shell uname),Darwin)
 DOCKER_RUN_FLAGS=--user=$(shell id -u)
@@ -162,12 +159,6 @@ base:
 .PHONY: peer
 peer: build/image/peer/$(DUMMY)
 
-.PHONY: light
-light: build/image/light/$(DUMMY)
-
-.PHONY: orderer
-orderer: build/image/orderer/$(DUMMY)
-
 .PHONY: javaenv
 javaenv: build/image/javaenv/$(DUMMY)
 
@@ -186,9 +177,6 @@ build/test: build/test/html \
             build/test/common_ledger_util_rocksdbhelper \
             build/test/peer_ledger_kvledger \
             build/test/peer_ledger_kvledger_txmgmt_statedb_stateleveldb \
-            build/test/peer_gossip_state \
-            build/test/peer_gossip_light \
-            build/test/orderer \
             build/test/peer		\
             build/test/bccsp_crypto_util
 
@@ -197,46 +185,23 @@ build/test/html:
 	@mkdir -p $@
 	@cp setup/code-coverage-index.html $@
 
-# orderer模块测试用例
-build/test/orderer:
-	@mkdir -p $@
-	@echo "go test orderer"
-	@export GO111MODULE=off
-	@go test github.com/rongzer/blockchain/orderer/filters -v -coverprofile=$@/1.out 2>&1 | go-junit-report > $@/Test1.xml
-	@go test github.com/rongzer/blockchain/orderer/filters/filter -v -coverprofile=$@/2.out 2>&1 | go-junit-report > $@/Test2.xml
-	@go test github.com/rongzer/blockchain/orderer/endorse -v -coverprofile=$@/3.out 2>&1 | go-junit-report > $@/Test3.xml
-	@go test github.com/rongzer/blockchain/orderer/ledger -v -coverprofile=$@/4.out 2>&1 | go-junit-report > $@/Test4.xml
-	@go test github.com/rongzer/blockchain/orderer/localconfig -v -coverprofile=$@/5.out 2>&1 | go-junit-report > $@/Test5.xml
-	@cd $@ && cat 1.out > c.out && cat 2.out|tail -n +2 >> c.out && cat 3.out|tail -n +2 >> c.out && cat 4.out|tail -n +2 >> c.out && cat 5.out|tail -n +2 >> c.out
-	@go tool cover -html=$@/c.out -o build/test/html/orderer.html
-	@sed -i 'N;8a\<a href="orderer.html">orderer</a>' build/test/html/code-coverage-index.html
-# 	@gocover-cobertura < $@/c.out > $@/coverage.xml
-
 # peer模块测试用例
 build/test/peer:
 	@mkdir -p $@
 	@echo "go test peer"
 	@export GO111MODULE=off
-	@go test github.com/rongzer/blockchain/peer/chain -v -coverprofile=$@/1.out 2>&1 | go-junit-report > $@/Test1.xml
-	@go test github.com/rongzer/blockchain/peer/endorser -ldflags="-X 'github.com/rongzer/blockchain/common/metadata.Version=1.0.0'" -v -coverprofile=$@/2.out 2>&1 | go-junit-report > $@/Test2.xml
-	@go test github.com/rongzer/blockchain/peer/events/producer -v -coverprofile=$@/3.out 2>&1 | go-junit-report > $@/Test3.xml
-	@go test github.com/rongzer/blockchain/peer/scc/ -v -coverprofile=$@/4.out 2>&1 | go-junit-report > $@/Test4.xml
-	@go test github.com/rongzer/blockchain/peer/scc/cscc -v -coverprofile=$@/5.out 2>&1 | go-junit-report > $@/Test5.xml
-	@go test github.com/rongzer/blockchain/peer/scc/escc -v -coverprofile=$@/6.out 2>&1 | go-junit-report > $@/Test6.xml
-	@go test github.com/rongzer/blockchain/peer/scc/lscc -v -coverprofile=$@/7.out 2>&1 | go-junit-report > $@/Test7.xml
-	@go test github.com/rongzer/blockchain/peer/scc/qscc -v -coverprofile=$@/8.out 2>&1 | go-junit-report > $@/Test8.xml
-	@go test github.com/rongzer/blockchain/peer/scc/rbcapproval -v -coverprofile=$@/9.out 2>&1 | go-junit-report > $@/Test9.xml
-	@go test github.com/rongzer/blockchain/peer/scc/rbcmodel -v -coverprofile=$@/10.out 2>&1 | go-junit-report > $@/Test10.xml
-	@go test github.com/rongzer/blockchain/peer/scc/rbctoken -v -coverprofile=$@/11.out 2>&1 | go-junit-report > $@/Test11.xml
-	@go test github.com/rongzer/blockchain/peer/scc/vscc -v -coverprofile=$@/12.out 2>&1 | go-junit-report > $@/Test12.xml
-	@cd $@ && cat 1.out > c.out && cat 2.out|tail -n +2 >> c.out && cat 3.out|tail -n +2 >> c.out && cat 4.out|tail -n +2 >> c.out && cat 5.out|tail -n +2 && cat 6.out > c.out && cat 7.out|tail -n +2 >> c.out && cat 8.out|tail -n +2 >> c.out && cat 9.out|tail -n +2 >> c.out && cat 10.out|tail -n +2 && cat 11.out|tail -n +2 >> c.out && cat 12.out|tail -n +2 >> c.out
+	@go test github.com/rongzer/blockchain/peer/events/producer -v -coverprofile=$@/1.out 2>&1 | go-junit-report > $@/Test1.xml
+	@go test github.com/rongzer/blockchain/peer/filters -v -coverprofile=$@/2.out 2>&1 | go-junit-report > $@/Test2.xml
+	@go test github.com/rongzer/blockchain/peer/filters/filter -v -coverprofile=$@/3.out 2>&1 | go-junit-report > $@/Test3.xml
+	@go test github.com/rongzer/blockchain/peer/dispatcher -v -coverprofile=$@/4.out 2>&1 | go-junit-report > $@/Test4.xml
+	@cd $@ && cat 1.out > c.out && cat 2.out|tail -n +2 >> c.out && cat 3.out|tail -n +2 >> c.out && cat 4.out|tail -n +2 >> c.out
 	@go tool cover -html=$@/c.out -o build/test/html/peer.html
-	@sed -i 'N;8a\<a href="orderer.html">orderer</a>' build/test/html/code-coverage-index.html
+	@sed -i 'N;8a\<a href="peer.html">peer</a>' build/test/html/code-coverage-index.html
 
 # common下bccso, crypto, util包的测试
 build/test/bccsp_crypto_util:
 	@mkdir -p $@
-	@echo "go test orderer"
+	@echo "go test bccsp/crypto/util"
 	@export GO111MODULE=off
 	@go test github.com/rongzer/blockchain/common/bccsp -v -coverprofile=$@/1.out 2>&1 | go-junit-report > $@/Test1.xml
 	@go test github.com/rongzer/blockchain/common/bccsp/factory -v -coverprofile=$@/2.out 2>&1 | go-junit-report > $@/Test2.xml
@@ -296,42 +261,10 @@ build/test/peer_ledger_kvledger:
 	@go tool cover -html=$@/c.out -o build/test/html/peer_ledger_kvledger.html
 	@sed -i 'N;8a\<a href="peer_ledger_kvledger.html">peer_ledger_kvledger</a>' build/test/html/code-coverage-index.html
 
-# peer/gossip/light模块共6个测试用例：模拟轻量节点同步块时的gossip请求
-build/test/peer_gossip_light:
-	@mkdir -p $@
-	@echo "go test peer/gossip/light"
-	@export GO111MODULE=off
-	@cd peer/gossip/light && go test -v state_test.go state.go payloads_buffer.go metastate.go -test.run TestLightGossipDirectMsg -coverprofile=../../../$@/1.out 2>&1 | go-junit-report > ../../../$@/Test1.xml
-	@cd peer/gossip/light && go test -v state_test.go state.go payloads_buffer.go metastate.go -test.run TestLightGossipReception -coverprofile=../../../$@/2.out 2>&1 | go-junit-report > ../../../$@/Test2.xml
-	@cd peer/gossip/light && go test -v state_test.go state.go payloads_buffer.go metastate.go -test.run TestLightGossipAccessControl -coverprofile=../../../$@/3.out 2>&1 | go-junit-report > ../../../$@/Test3.xml
-	@cd peer/gossip/light && go test -v state_test.go state.go payloads_buffer.go metastate.go -test.run TestLightGossip_SendingManyMessages -coverprofile=../../../$@/4.out 2>&1 | go-junit-report > ../../../$@/Test4.xml
-	@cd peer/gossip/light && go test -v state_test.go state.go payloads_buffer.go metastate.go -test.run TestLightGossip_LightWeightRequest -coverprofile=../../../$@/5.out 2>&1 | go-junit-report > ../../../$@/Test5.xml
-	@cd peer/gossip/light && go test -v state_test.go state.go payloads_buffer.go metastate.go -test.run TestLightGossip_FailedLightWeightRequest -coverprofile=../../../$@/6.out 2>&1 | go-junit-report > ../../../$@/Test6.xml
-	@cd $@ && cat 1.out > c.out && cat 2.out|tail -n +2 >> c.out && cat 3.out|tail -n +2 >> c.out && cat 4.out|tail -n +2 >> c.out && cat 5.out|tail -n +2 >> c.out \
-	 && cat 6.out|tail -n +2 >> c.out
-	@go tool cover -html=$@/c.out -o build/test/html/peer_gossip_light.html
-	@sed -i 'N;8a\<a href="peer_gossip_light.html">peer_gossip_light</a>' build/test/html/code-coverage-index.html
-
-# peer/gossip/state模块共7个测试用例：模拟普通节点同步块时的gossip请求
-build/test/peer_gossip_state:
-	@mkdir -p $@
-	@echo "go test peer/gossip/state"
-	@export GO111MODULE=off
-	@cd peer/gossip/state && go test -v state_test.go state.go payloads_buffer.go metastate.go -test.run TestPeerGossipDirectMsg -coverprofile=../../../$@/1.out 2>&1 | go-junit-report > ../../../$@/Test1.xml
-	@cd peer/gossip/state && go test -v state_test.go state.go payloads_buffer.go metastate.go -test.run TestPeerGossipReception -coverprofile=../../../$@/2.out 2>&1 | go-junit-report > ../../../$@/Test2.xml
-	@cd peer/gossip/state && go test -v state_test.go state.go payloads_buffer.go metastate.go -test.run TestPeerGossipAccessControl -coverprofile=../../../$@/3.out 2>&1 | go-junit-report > ../../../$@/Test3.xml
-	@cd peer/gossip/state && go test -v state_test.go state.go payloads_buffer.go metastate.go -test.run TestPeerGossip_SendingManyMessages -coverprofile=../../../$@/4.out 2>&1 | go-junit-report > ../../../$@/Test4.xml
-	@cd peer/gossip/state && go test -v state_test.go state.go payloads_buffer.go metastate.go -test.run TestPeerGossip_StateRequest -coverprofile=../../../$@/5.out 2>&1 | go-junit-report > ../../../$@/Test5.xml
-	@cd peer/gossip/state && go test -v state_test.go state.go payloads_buffer.go metastate.go -test.run TestPeerGossip_LightWeightRequest -coverprofile=../../../$@/6.out 2>&1 | go-junit-report > ../../../$@/Test6.xml
-	@cd peer/gossip/state && go test -v state_test.go state.go payloads_buffer.go metastate.go -test.run TestPeerGossip_FailedLightWeightRequest -coverprofile=../../../$@/7.out 2>&1 | go-junit-report > ../../../$@/Test7.xml
-	@cd $@ && cat 1.out > c.out && cat 2.out|tail -n +2 >> c.out && cat 3.out|tail -n +2 >> c.out && cat 4.out|tail -n +2 >> c.out && cat 5.out|tail -n +2 >> c.out \
-	 && cat 6.out|tail -n +2 >> c.out && cat 7.out|tail -n +2 >> c.out
-	@go tool cover -html=$@/c.out -o build/test/html/peer_gossip_state.html
-	@sed -i 'N;8a\<a href="peer_gossip_state.html">peer_gossip_state</a>' build/test/html/code-coverage-index.html
 
 # We (re)build a package within a docker context but persist the $GOPATH/pkg
 # directory so that subsequent builds are faster
-build/docker/bin/%: $(PROJECT_FILES)
+build/docker/bin/%: Makefile
 	$(eval TARGET = ${patsubst build/docker/bin/%,%,${@}})
 	@echo "Building $@"
 	@echo "go build -o $@ -ldflags $(DOCKER_GO_LDFLAGS) $(pkgmap.$(@F))"
@@ -362,12 +295,6 @@ build/image/peer/payload:       build/docker/bin/peer \
 				setup/signEnv.so \
 				build/sampleconfig.tar.bz2 \
                 images/peer/docker-entrypoint.sh
-build/image/light/payload:       build/docker/bin/light \
-				setup/signEnv.so \
-				build/sampleconfig.tar.bz2 \
-                images/light/docker-entrypoint.sh
-build/image/orderer/payload:    build/docker/bin/orderer \
-				build/sampleconfig.tar.bz2
 build/image/kafka/payload:      images/kafka/docker-entrypoint.sh \
 				images/kafka/kafka-run-class.sh \
 				images/kafka/kafka_2.11-0.9.0.1.tgz
@@ -420,14 +347,6 @@ clean: docker-clean
 .PHONY: cleanPeer
 cleanPeer: peer-docker-clean
 	-@rm -rf build/docker/peer build/docker/bin/peer build/image/peer
-
-.PHONY: cleanLight
-cleanLight: light-docker-clean
-	-@rm -rf build/docker/light build/docker/bin/light build/image/light
-
-.PHONY: cleanOrderer
-cleanOrderer: orderer-docker-clean
-	-@rm -rf build/docker/orderer build/docker/bin/orderer build/image/orderer
 
 .PHONY: cleanJavaenv
 cleanJavaenv: javaenv-docker-clean

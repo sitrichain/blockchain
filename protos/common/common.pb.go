@@ -861,6 +861,54 @@ func (m *BlockMetadata) GetMetadata() [][]byte {
 	return nil
 }
 
+// OrdererBlockMetadata defines metadata that is set by the ordering service.
+type OrdererBlockMetadata struct {
+	LastConfig           *LastConfig `protobuf:"bytes,1,opt,name=lastConfig,json=lastConfig,proto3" json:"lastConfig,omitempty"`
+	ConsenterMetadata    []byte      `protobuf:"bytes,2,opt,name=consenterMetadata,json=consenterMetadata,proto3" json:"consenterMetadata,omitempty"`
+	XXX_NoUnkeyedLiteral struct{}    `json:"-"`
+	XXX_unrecognized     []byte      `json:"-"`
+	XXX_sizecache        int32       `json:"-"`
+}
+
+func (m *OrdererBlockMetadata) Reset()         { *m = OrdererBlockMetadata{} }
+func (m *OrdererBlockMetadata) String() string { return proto.CompactTextString(m) }
+func (*OrdererBlockMetadata) ProtoMessage()    {}
+func (*OrdererBlockMetadata) Descriptor() ([]byte, []int) {
+	return fileDescriptor_8f954d82c0b891f6, []int{12}
+}
+
+func (m *OrdererBlockMetadata) XXX_Unmarshal(b []byte) error {
+	return xxx_messageInfo_OrdererBlockMetadata.Unmarshal(m, b)
+}
+func (m *OrdererBlockMetadata) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
+	return xxx_messageInfo_OrdererBlockMetadata.Marshal(b, m, deterministic)
+}
+func (m *OrdererBlockMetadata) XXX_Merge(src proto.Message) {
+	xxx_messageInfo_OrdererBlockMetadata.Merge(m, src)
+}
+func (m *OrdererBlockMetadata) XXX_Size() int {
+	return xxx_messageInfo_OrdererBlockMetadata.Size(m)
+}
+func (m *OrdererBlockMetadata) XXX_DiscardUnknown() {
+	xxx_messageInfo_OrdererBlockMetadata.DiscardUnknown(m)
+}
+
+var xxx_messageInfo_OrdererBlockMetadata proto.InternalMessageInfo
+
+func (m *OrdererBlockMetadata) GetLastConfig() *LastConfig {
+	if m != nil {
+		return m.LastConfig
+	}
+	return nil
+}
+
+func (m *OrdererBlockMetadata) GetConsenterMetadata() []byte {
+	if m != nil {
+		return m.ConsenterMetadata
+	}
+	return nil
+}
+
 type VersionValue struct {
 	Value  []byte  `protobuf:"bytes,1,opt,name=value,proto3" json:"value,omitempty"`
 	Height *Height `protobuf:"bytes,2,opt,name=height,proto3" json:"height,omitempty"`
@@ -1034,6 +1082,7 @@ func init() {
 	proto.RegisterType((*BlockHeader)(nil), "common.BlockHeader")
 	proto.RegisterType((*BlockData)(nil), "common.BlockData")
 	proto.RegisterType((*BlockMetadata)(nil), "common.BlockMetadata")
+	proto.RegisterType((*OrdererBlockMetadata)(nil), "common.OrdererBlockMetadata")
 	proto.RegisterType((*VersionValue)(nil), "common.VersionValue")
 	proto.RegisterType((*Height)(nil), "common.Height")
 	proto.RegisterType((*ValidateResultCode)(nil), "common.ValidateResultCode")

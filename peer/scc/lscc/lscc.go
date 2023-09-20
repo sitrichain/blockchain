@@ -11,6 +11,8 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/rongzer/blockchain/common/conf"
+
 	docker "github.com/fsouza/go-dockerclient"
 	"github.com/gogo/protobuf/proto"
 	jsoniter "github.com/json-iterator/go"
@@ -18,7 +20,6 @@ import (
 	"github.com/rongzer/blockchain/common/log"
 	mspmgmt "github.com/rongzer/blockchain/common/msp/mgmt"
 	"github.com/rongzer/blockchain/common/util"
-	"github.com/rongzer/blockchain/peer/chain"
 	"github.com/rongzer/blockchain/peer/chaincode/shim"
 	"github.com/rongzer/blockchain/peer/common/ccprovider"
 	"github.com/rongzer/blockchain/peer/common/sysccprovider"
@@ -30,7 +31,6 @@ import (
 	"github.com/rongzer/blockchain/protos/msp"
 	pb "github.com/rongzer/blockchain/protos/peer"
 	"github.com/rongzer/blockchain/protos/utils"
-	"github.com/spf13/viper"
 )
 
 //The life cycle system chaincode manages chaincodes deployed
@@ -494,9 +494,7 @@ func (lscc *LifeCycleSysCC) getInstantiationPolicy(channel string, ccpack ccprov
 	} else {
 		// the default instantiation policy allows any of the channel MSP admins
 		// to be able to instantiate
-		mspids := chain.GetMSPIDs(channel)
-
-		p := cauthdsl.SignedByAnyAdmin(mspids)
+		p := cauthdsl.SignedByAnyAdmin([]string{conf.V.Peer.MSPID})
 		ip, err = utils.Marshal(p)
 		if err != nil {
 			return nil, fmt.Errorf("Error marshalling default instantiation policy")
@@ -947,8 +945,6 @@ func (lscc *LifeCycleSysCC) Invoke(stub shim.ChaincodeStubInterface) pb.Response
 		if len(args) < 4 || len(args) > 7 {
 			return shim.Error(InvalidArgsLenErr(len(args)).Error())
 		}
-		chainname := string(args[1])
-
 		ccname := string(args[2])
 		ccversion := string(args[3])
 		alias := string(args[4])
@@ -982,7 +978,7 @@ func (lscc *LifeCycleSysCC) Invoke(stub shim.ChaincodeStubInterface) pb.Response
 		if len(args) > 5 && len(args[5]) > 0 {
 			policyBytes = args[5]
 		} else {
-			p := cauthdsl.SignedByAnyMember(chain.GetMSPIDs(chainname))
+			p := cauthdsl.SignedByAnyMember([]string{conf.V.Peer.MSPID})
 			policyBytes, err = utils.Marshal(p)
 			if err != nil {
 				return shim.Error(err.Error())
@@ -1268,14 +1264,13 @@ func (lscc *LifeCycleSysCC) compileJavaChainCode(stub shim.ChaincodeStubInterfac
 	}
 
 	//  呼出docker执行
-	dockerHubDomain := viper.GetString("docker.hub.domain")
+	dockerHubDomain := conf.V.Peer.VM.Hub
 	if len(dockerHubDomain) < 10 {
 		dockerHubDomain = ""
 	} else {
 		dockerHubDomain = strings.TrimSpace(dockerHubDomain)
 	}
-	dockerImageTag := viper.GetString("docker.image.tag")
-	javaEnv := dockerHubDomain + "rongzer/blockchain-javaenv" + dockerImageTag
+	javaEnv := dockerHubDomain + "rongzer/blockchain-javaenv" + conf.V.Peer.VM.ImageTag
 
 	javaImage, err := client.InspectImage(javaEnv)
 	if err != nil {

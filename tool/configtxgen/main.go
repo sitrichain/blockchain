@@ -23,10 +23,10 @@ import (
 
 func doOutputBlock(config *genesisconfig.Profile, channelID string, outputBlock string) error {
 	// 针对共识名改为小写的问题, 强制指定sampleconsortium为大写
-	if c, ok := config.Consortiums["sampleconsortium"]; ok {
+	/*if c, ok := config.Consortiums["sampleconsortium"]; ok {
 		config.Consortiums["SampleConsortium"] = c
 		delete(config.Consortiums, "sampleconsortium")
-	}
+	}*/
 	log.Logger.Infof("Consortium!!!!!!!!!! %v", config.Consortiums)
 
 	pgen := provisional.New(config)

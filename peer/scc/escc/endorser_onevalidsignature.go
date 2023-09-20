@@ -34,7 +34,7 @@ type EndorserOneValidSignature struct {
 
 // Init is called once when the chaincode started the first time
 func (e *EndorserOneValidSignature) Init(_ shim.ChaincodeStubInterface) pb.Response {
-	log.Logger.Infof("Successfully initialized ESCC")
+	log.Logger.Debug("Successfully initialized ESCC")
 
 	return shim.Success(nil)
 }
@@ -141,7 +141,7 @@ func (e *EndorserOneValidSignature) Invoke(stub shim.ChaincodeStubInterface) pb.
 	}
 
 	// obtain the default signing identity for this peer; it will be used to sign this proposal response
-	localMsp := mspmgmt.GetLocalMSP()
+	localMsp := mspmgmt.GetLocalMSPOfPeer()
 	if localMsp == nil {
 		return shim.Error("Nil local MSP manager")
 	}

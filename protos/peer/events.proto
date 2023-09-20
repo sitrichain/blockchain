@@ -33,7 +33,7 @@ enum EventType {
     CHAINCODE = 2;
     REJECTION = 3;
     SUCCESS = 4;
-    MVCCTX = 5;
+    HEARTBEAT = 5;
 }
 
 //ChaincodeReg is used for registering chaincode Interests
@@ -81,8 +81,8 @@ message Unregister {
 }
 
 // new added message for new event
-message MvcctxEvent {
-    repeated bytes data = 1;
+message Heartbeat {
+
 }
 
 // SignedEvent is used for any communication between consumer and producer
@@ -111,7 +111,7 @@ message Event {
 
         //Unregister consumer sent events
         Unregister unregister = 7;
-        MvcctxEvent mvcctx_event = 8;
+        Heartbeat heartbeat = 8;
 
     }
     // Creator of the event, specified as a certificate chain

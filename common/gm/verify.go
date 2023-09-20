@@ -1023,7 +1023,6 @@ func (c *Certificate) VerifyHostname(h string) error {
 			}
 		}
 	}
-
 	return HostnameError{c, h}
 }
 

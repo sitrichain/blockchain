@@ -128,12 +128,6 @@ func DockerBuild(opts DockerBuildOptions) error {
 	if err != nil {
 		return fmt.Errorf("Error creating docker client: %s", err)
 	}
-	if opts.Image == "" {
-		opts.Image = cutil.GetDockerfileFromConfig("chaincode.builder")
-		if opts.Image == "" {
-			return fmt.Errorf("No image provided and \"chaincode.builder\" default does not exist")
-		}
-	}
 
 	log.Logger.Debugf("Attempting build with image %s", opts.Image)
 

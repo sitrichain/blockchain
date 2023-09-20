@@ -5,16 +5,13 @@ import (
 	"math/rand"
 	"reflect"
 	"runtime"
-	"strings"
 	"testing"
 
 	"github.com/gogo/protobuf/proto"
-	"github.com/rongzer/blockchain/peer/config"
 	lutils "github.com/rongzer/blockchain/peer/ledger/util"
 	"github.com/rongzer/blockchain/protos/common"
 	pb "github.com/rongzer/blockchain/protos/peer"
 	"github.com/rongzer/blockchain/protos/utils"
-	"github.com/spf13/viper"
 )
 
 //BlockGenerator generates a series of blocks for testing
@@ -182,22 +179,4 @@ type TestRandomNumberGenerator struct {
 // Next generates next random number
 func (randNumGenerator *TestRandomNumberGenerator) Next() int {
 	return randNumGenerator.rand.Intn(randNumGenerator.maxNumber)
-}
-
-// SetupCoreYAMLConfig sets up configurations for testing
-func SetupCoreYAMLConfig() {
-	viper.SetConfigName("core")
-	viper.SetEnvPrefix("CORE")
-	viper.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
-	viper.AutomaticEnv()
-
-	err := config.AddDevConfigPath(nil)
-	if err != nil {
-		panic(fmt.Errorf("Fatal error adding dev dir: %s \n", err))
-	}
-
-	err = viper.ReadInConfig()
-	if err != nil { // Handle errors reading the config file
-		panic(fmt.Errorf("Fatal error config file: %s \n", err))
-	}
 }

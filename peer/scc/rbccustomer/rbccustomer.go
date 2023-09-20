@@ -241,6 +241,8 @@ func (t *RBCCustomer) register(stub shim.ChaincodeStubInterface, params string) 
 	nCustomerSize := stub.Size("customer")
 	customerEntity := &CustomerEntity{}
 
+	log.Logger.Info("regist with params : ", params)
+
 	if err := jsoniter.Unmarshal([]byte(params), customerEntity); err != nil {
 		return shim.Error(fmt.Sprintf("register param is not a json, %s", err))
 	}

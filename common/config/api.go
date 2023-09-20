@@ -79,7 +79,8 @@ type Consortium interface {
 type Orderer interface {
 	// ConsensusType returns the configured consensus type
 	ConsensusType() string
-
+	// ConsensusMetadata returns the configured metadata
+	ConsensusMetadata() []byte
 	// BatchSize returns the maximum number of messages to include in a block
 	BatchSize() *ab.BatchSize
 
@@ -88,11 +89,6 @@ type Orderer interface {
 
 	// MaxChainsCount returns the maximum count of channels to allow for an ordering network
 	MaxChainsCount() uint64
-
-	// KafkaBrokers returns the addresses (IP:port notation) of a set of "bootstrap"
-	// Kafka brokers, i.e. this is not necessarily the entire set of Kafka brokers
-	// used for ordering
-	KafkaBrokers() []string
 
 	// Organizations returns the organizations for the ordering service
 	Organizations() map[string]Org

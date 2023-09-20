@@ -173,6 +173,11 @@ message BlockMetadata {
     repeated bytes metadata = 1;
 }
 
+message OrdererBlockMetadata {
+    LastConfig lastConfig = 1;
+    bytes consenterMetadata = 2;
+}
+
 message VersionValue {
     bytes value = 1;
     Height height = 2;

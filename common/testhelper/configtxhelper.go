@@ -1,28 +1,18 @@
 package testhelper
 
 import (
-	"path/filepath"
-
+	"github.com/rongzer/blockchain/common/conf"
 	"github.com/rongzer/blockchain/common/config"
 	configtxmsp "github.com/rongzer/blockchain/common/config/msp"
 	"github.com/rongzer/blockchain/common/configtx"
 	"github.com/rongzer/blockchain/common/genesis"
 	"github.com/rongzer/blockchain/common/log"
 	"github.com/rongzer/blockchain/common/msp"
-	cf "github.com/rongzer/blockchain/peer/config"
 	cb "github.com/rongzer/blockchain/protos/common"
 	mspproto "github.com/rongzer/blockchain/protos/msp"
 	genesisconfig "github.com/rongzer/blockchain/tool/configtxgen/localconfig"
 	"github.com/rongzer/blockchain/tool/configtxgen/provisional"
 )
-
-func getConfigDir() string {
-	devDir, err := cf.GetDevConfigDir()
-	if err != nil {
-		log.Logger.Panicf("Could not find dev-config dir, try setting GOPATH correctly")
-	}
-	return filepath.Join(devDir, "msp")
-}
 
 // MakeGenesisBlock creates a genesis block using the test templates for the given chainID
 func MakeGenesisBlock(chainID string) (*cb.Block, error) {
@@ -50,7 +40,7 @@ const sampleOrgID = "DEFAULT"
 
 // ApplicationOrgTemplate returns the SAMPLE org with MSP template
 func ApplicationOrgTemplate() configtx.Template {
-	mspConf, err := msp.GetLocalMspConfig(getConfigDir(), nil, sampleOrgID)
+	mspConf, err := msp.GetLocalMspConfig(conf.V.MSPDir, nil, sampleOrgID)
 	if err != nil {
 		log.Logger.Panicf("Could not load sample MSP config: %s", err)
 	}
@@ -59,7 +49,7 @@ func ApplicationOrgTemplate() configtx.Template {
 
 // OrdererOrgTemplate returns the SAMPLE org with MSP template
 func OrdererOrgTemplate() configtx.Template {
-	mspConf, err := msp.GetLocalMspConfig(getConfigDir(), nil, sampleOrgID)
+	mspConf, err := msp.GetLocalMspConfig(conf.V.MSPDir, nil, sampleOrgID)
 	if err != nil {
 		log.Logger.Panicf("Could not load sample MSP config: %s", err)
 	}

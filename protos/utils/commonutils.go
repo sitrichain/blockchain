@@ -18,6 +18,8 @@ package utils
 
 import (
 	"fmt"
+	"github.com/pkg/errors"
+	"github.com/rongzer/blockchain/common/conf"
 	"time"
 
 	"github.com/gogo/protobuf/proto"
@@ -98,6 +100,29 @@ func UnmarshalEnvelopeOfType(envelope *cb.Envelope, headerType cb.HeaderType, me
 	return chdr, nil
 }
 
+// ChannelHeader returns the *cb.ChannelHeader for a given *cb.Envelope.
+func ChannelHeader(env *cb.Envelope) (*cb.ChannelHeader, error) {
+	envPayload, err := UnmarshalPayload(env.Payload)
+	if err != nil {
+		return nil, err
+	}
+
+	if envPayload.Header == nil {
+		return nil, errors.New("header not set")
+	}
+
+	if envPayload.Header.ChannelHeader == nil {
+		return nil, errors.New("channel header not set")
+	}
+
+	chdr, err := UnmarshalChannelHeader(envPayload.Header.ChannelHeader)
+	if err != nil {
+		return nil, errors.WithMessage(err, "error unmarshaling channel header")
+	}
+
+	return chdr, nil
+}
+
 // ExtractEnvelope retrieves the requested envelope from a given block and unmarshals it.
 func ExtractEnvelope(block *cb.Block, index int) (*cb.Envelope, error) {
 	if block.Data == nil {
@@ -117,16 +142,16 @@ func ExtractEnvelope(block *cb.Block, index int) (*cb.Envelope, error) {
 }
 
 // MakeChannelHeader creates a ChannelHeader.
-func MakeChannelHeader(headerType cb.HeaderType, version int32, chainID string, epoch uint64) *cb.ChannelHeader {
+func MakeChannelHeader(headerType cb.HeaderType, chainID string) *cb.ChannelHeader {
 	return &cb.ChannelHeader{
 		Type:    int32(headerType),
-		Version: version,
+		Version: 0,
 		Timestamp: &types.Timestamp{
 			Seconds: time.Now().Unix(),
 			Nanos:   0,
 		},
 		ChannelId: chainID,
-		Epoch:     epoch,
+		Epoch:     0,
 	}
 }
 
@@ -202,4 +227,48 @@ func IsConfigBlock(block *cb.Block) bool {
 	}
 
 	return cb.HeaderType(hdr.Type) == cb.HeaderType_CONFIG
+}
+
+// ConfigEnvelopeFromBlock extracts configuration envelope from the block based on the
+// config type, i.e. HeaderType_ORDERER_TRANSACTION or HeaderType_CONFIG
+func GetConfigEnvelopeFromBlock(block *cb.Block) (*cb.Envelope, int32, bool, error) {
+	if block == nil {
+		return nil, 0, false, errors.New("nil block")
+	}
+
+	envelope, err := ExtractEnvelope(block, 0)
+	if err != nil {
+		return nil, 0, false, errors.Wrapf(err, "failed to extract envelope from the block")
+	}
+
+	channelHeader, err := ChannelHeader(envelope)
+	if err != nil {
+		return nil, 0, false, errors.Wrap(err, "cannot extract channel header")
+	}
+
+	switch channelHeader.Type {
+	case int32(cb.HeaderType_ORDERER_TRANSACTION):
+		var ableToCreateChain bool
+		// 从attach中抽取firstNode，若等于自身节点地址，说明自身节点为该链的创建者，也是该链的raft集群的第一个节点，返回true
+		if envelope.Attachs != nil && len(envelope.Attachs) > 0 {
+			firstNode := envelope.Attachs["firstNode"]
+			if firstNode == conf.V.Sealer.Raft.EndPoint {
+				ableToCreateChain = true
+			}
+		}
+		payload, err := UnmarshalPayload(envelope.Payload)
+		if err != nil {
+			return nil, 0, false, errors.Wrap(err, "failed to unmarshal envelope to extract config payload for orderer transaction")
+		}
+		configEnvelop, err := UnmarshalEnvelope(payload.Data)
+		if err != nil {
+			return nil, 0, false, errors.Wrap(err, "failed to unmarshal config envelope for orderer type transaction")
+		}
+
+		return configEnvelop, 4, ableToCreateChain, nil
+	case int32(cb.HeaderType_CONFIG):
+		return envelope, 1, false, nil
+	default:
+		return nil, 0, false, errors.Errorf("unexpected header type: %v", channelHeader.Type)
+	}
 }

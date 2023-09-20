@@ -1,11 +1,9 @@
 package testhelper
 
 import (
-	"path/filepath"
-
+	"github.com/rongzer/blockchain/common/conf"
 	m "github.com/rongzer/blockchain/common/msp"
 	"github.com/rongzer/blockchain/common/msp/mgmt"
-	"github.com/rongzer/blockchain/peer/config"
 	"github.com/rongzer/blockchain/protos/msp"
 )
 
@@ -126,11 +124,7 @@ func (id *noopsigningidentity) GetPublicVersion() m.Identity {
 // LoadTestMSPSetup sets up the local MSP
 // and a chain MSP for the default chain
 func LoadMSPSetupForTesting() error {
-	dir, err := config.GetDevConfigDir()
-	if err != nil {
-		return err
-	}
-	conf, err := m.GetLocalMspConfig(filepath.Join(dir, "msp"), nil, "DEFAULT")
+	conf, err := m.GetLocalMspConfig(conf.V.MSPDir, nil, "DEFAULT")
 	if err != nil {
 		return err
 	}

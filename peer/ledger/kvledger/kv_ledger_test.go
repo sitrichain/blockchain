@@ -1,26 +1,25 @@
 package kvledger
 
 import (
+	"os"
+	"strconv"
+	"testing"
+
+	"github.com/rongzer/blockchain/common/conf"
 	"github.com/rongzer/blockchain/common/testhelper"
 	"github.com/rongzer/blockchain/peer/ledger/ledgerconfig"
 	"github.com/rongzer/blockchain/protos/common"
 	"github.com/rongzer/blockchain/protos/ledger/queryresult"
 	"github.com/rongzer/blockchain/protos/peer"
 	putils "github.com/rongzer/blockchain/protos/utils"
-	"github.com/spf13/viper"
 	"github.com/stretchr/testify/assert"
-	"os"
-	"strconv"
-	"testing"
 )
 
 // 测试peer账本的块存储/获取功能
 func TestKVLedgerBlockStorage(t *testing.T) {
-	// 读取core.yaml配置文件
-	testhelper.SetupCoreYAMLConfig()
 	// 创建测试环境
 	testPath := "/tmp/rongzer/test/kvledger"
-	viper.Set("peer.fileSystemPath", testPath)
+	conf.V.FileSystemPath = testPath
 	defer func() {
 		os.RemoveAll(testPath)
 	}()
@@ -108,10 +107,8 @@ func TestKVLedgerBlockStorage(t *testing.T) {
 // 测试场景1：block2已写入peer账本块存储文件，但未应用此块更新世界状态数据库，
 // 即kvLedger对象的Commit方法只完成了验证区块和向存储文件添加区块的工作时，peer"挂"了
 func TestKVLedgerRecoveryNotUpdateStateDb_beforeFail(t *testing.T) {
-	// 读取core.yaml配置文件
-	testhelper.SetupCoreYAMLConfig()
 	// 创建测试环境
-	viper.Set("peer.fileSystemPath", "/tmp/rongzer/test/kvledger1")
+	conf.V.FileSystemPath = "/tmp/rongzer/test/kvledger1"
 	// 创建一个Provider对象
 	provider, _ := NewProvider()
 	defer provider.Close()
@@ -138,8 +135,8 @@ func TestKVLedgerRecoveryNotUpdateStateDb_beforeFail(t *testing.T) {
 	simRes, _ = simulator.GetTxSimulationResults()
 	block2 := bg.NextBlock([][]byte{simRes})
 	// kvLedger对象的Commit方法只完成了的这部分工作——验证区块和向存储文件添加区块
-	ledger.(*kvLedger).txtmgmt.ValidateAndPrepare(block2, true)
-	err := ledger.(*kvLedger).blockStore.AddBlock(block2)
+	ledger.(*KvLedger).txtmgmt.ValidateAndPrepare(block2, true)
+	err := ledger.(*KvLedger).BlockStore.AddBlock(block2)
 	assert.NoError(t, err)
 	// 从世界状态数据库中查询key1、key2、key3的值，应为block1提交后的值
 	simulator, _ = ledger.NewTxSimulator()
@@ -150,7 +147,7 @@ func TestKVLedgerRecoveryNotUpdateStateDb_beforeFail(t *testing.T) {
 	value, _ = simulator.GetState("ns1", "key3")
 	testhelper.AssertEquals(t, value, []byte("value3.1"))
 	// 从世界状态数据库中查询LastSavepoint，应为数据库中保存的当前块高度——1
-	stateDBSavepoint, _ := ledger.(*kvLedger).txtmgmt.GetLastSavepoint()
+	stateDBSavepoint, _ := ledger.(*KvLedger).txtmgmt.GetLastSavepoint()
 	testhelper.AssertEquals(t, stateDBSavepoint.BlockNum, uint64(1))
 	// 同理，验证历史数据库是否更新——未更新
 	if ledgerconfig.IsHistoryDBEnabled() == true {
@@ -169,7 +166,7 @@ func TestKVLedgerRecoveryNotUpdateStateDb_beforeFail(t *testing.T) {
 			testhelper.AssertEquals(t, retrievedValue, expectedValue)
 		}
 		testhelper.AssertEquals(t, count, 1)
-		historyDBSavepoint, _ := ledger.(*kvLedger).historyDB.GetLastSavepoint()
+		historyDBSavepoint, _ := ledger.(*KvLedger).historyDB.GetLastSavepoint()
 		testhelper.AssertEquals(t, historyDBSavepoint.BlockNum, uint64(1))
 	}
 
@@ -179,9 +176,8 @@ func TestKVLedgerRecoveryNotUpdateStateDb_beforeFail(t *testing.T) {
 // 假设，这个时候peer"恢复"了，会重新调用NewProvider()函数，此时世界状态数据库会根据块存储文件进行recover，即把block2进行应用，
 // 因为在NewProvider函数中调用了Provider的recoverUnderConstructionLedger方法
 func TestKVLedgerRecoveryNotUpdateStateDb_afterFail(t *testing.T) {
-	testhelper.SetupCoreYAMLConfig()
 	// 创建测试环境
-	viper.Set("peer.fileSystemPath", "/tmp/rongzer/test/kvledger1")
+	conf.V.FileSystemPath = "/tmp/rongzer/test/kvledger1"
 	defer func() {
 		os.RemoveAll("/tmp/rongzer/test/kvledger1")
 	}()
@@ -197,7 +193,7 @@ func TestKVLedgerRecoveryNotUpdateStateDb_afterFail(t *testing.T) {
 	testhelper.AssertEquals(t, value, []byte("value2.2"))
 	value, _ = simulator.GetState("ns1", "key3")
 	testhelper.AssertEquals(t, value, []byte("value3.2"))
-	stateDBSavepoint, _ := ledger.(*kvLedger).txtmgmt.GetLastSavepoint()
+	stateDBSavepoint, _ := ledger.(*KvLedger).txtmgmt.GetLastSavepoint()
 	testhelper.AssertEquals(t, stateDBSavepoint.BlockNum, uint64(2))
 	// 同理，验证历史数据库是否更新——已更新
 	if ledgerconfig.IsHistoryDBEnabled() == true {
@@ -216,7 +212,7 @@ func TestKVLedgerRecoveryNotUpdateStateDb_afterFail(t *testing.T) {
 			testhelper.AssertEquals(t, retrievedValue, expectedValue)
 		}
 		testhelper.AssertEquals(t, count, 2)
-		historyDBSavepoint, _ := ledger.(*kvLedger).historyDB.GetLastSavepoint()
+		historyDBSavepoint, _ := ledger.(*KvLedger).historyDB.GetLastSavepoint()
 		testhelper.AssertEquals(t, historyDBSavepoint.BlockNum, uint64(2))
 	}
 	simulator.Done()
@@ -226,9 +222,8 @@ func TestKVLedgerRecoveryNotUpdateStateDb_afterFail(t *testing.T) {
 // 测试场景2：block1已被提交应用于更新世界状态数据库，但未被应用于更新历史数据库，
 // 即kvLedger对象的Commit方法只完成了验证区块/向存储文件添加区块/更新世界状态数据库的工作时，peer"挂"了
 func TestKVLedgerRecoveryNotUpdateHistoryDb_beforeFail(t *testing.T) {
-	testhelper.SetupCoreYAMLConfig()
 	// 创建测试环境
-	viper.Set("peer.fileSystemPath", "/tmp/rongzer/test/kvledger2")
+	conf.V.FileSystemPath = "/tmp/rongzer/test/kvledger2"
 	provider, _ := NewProvider()
 	defer provider.Close()
 	// 创建一个"模拟块"生成器
@@ -245,9 +240,9 @@ func TestKVLedgerRecoveryNotUpdateHistoryDb_beforeFail(t *testing.T) {
 	simRes, _ := simulator.GetTxSimulationResults()
 	block1 := bg.NextBlock([][]byte{simRes})
 	// kvLedger对象的Commit方法只完成了的这部分工作——验证区块/向存储文件添加区块/更新世界状态数据库
-	ledger.(*kvLedger).txtmgmt.ValidateAndPrepare(block1, true)
-	err := ledger.(*kvLedger).blockStore.AddBlock(block1)
-	err = ledger.(*kvLedger).txtmgmt.Commit()
+	ledger.(*KvLedger).txtmgmt.ValidateAndPrepare(block1, true)
+	err := ledger.(*KvLedger).BlockStore.AddBlock(block1)
+	err = ledger.(*KvLedger).txtmgmt.Commit()
 	assert.NoError(t, err)
 	// 检查历史数据库是否更新——未更新
 	if ledgerconfig.IsHistoryDBEnabled() == true {
@@ -266,7 +261,7 @@ func TestKVLedgerRecoveryNotUpdateHistoryDb_beforeFail(t *testing.T) {
 			testhelper.AssertEquals(t, retrievedValue, expectedValue)
 		}
 		testhelper.AssertEquals(t, count, 0)
-		historyDBSavepoint, _ := ledger.(*kvLedger).historyDB.GetLastSavepoint()
+		historyDBSavepoint, _ := ledger.(*KvLedger).historyDB.GetLastSavepoint()
 		testhelper.AssertEquals(t, historyDBSavepoint.BlockNum, uint64(0))
 	}
 	simulator.Done()
@@ -275,9 +270,8 @@ func TestKVLedgerRecoveryNotUpdateHistoryDb_beforeFail(t *testing.T) {
 // 假设，这个时候peer"恢复"了，会重新调用NewProvider()函数，此时历史数据库会根据块存储文件进行recover，即把block1进行应用，
 // 因为在NewProvider函数中调用了Provider的recoverUnderConstructionLedger方法
 func TestKVLedgerRecoveryNotUpdateHistoryDb_afterFail(t *testing.T) {
-	testhelper.SetupCoreYAMLConfig()
 	// 创建测试环境
-	viper.Set("peer.fileSystemPath", "/tmp/rongzer/test/kvledger2")
+	conf.V.FileSystemPath = "/tmp/rongzer/test/kvledger2"
 	defer func() {
 		os.RemoveAll("/tmp/rongzer/test/kvledger2")
 	}()
@@ -286,7 +280,7 @@ func TestKVLedgerRecoveryNotUpdateHistoryDb_afterFail(t *testing.T) {
 	ledger, _ := provider.Open("testLedger")
 	defer ledger.Close()
 	simulator, _ := ledger.NewTxSimulator()
-	stateDBSavepoint, _ := ledger.(*kvLedger).txtmgmt.GetLastSavepoint()
+	stateDBSavepoint, _ := ledger.(*KvLedger).txtmgmt.GetLastSavepoint()
 	testhelper.AssertEquals(t, stateDBSavepoint.BlockNum, uint64(1))
 	// 检查历史数据库是否更新——已更新
 	if ledgerconfig.IsHistoryDBEnabled() == true {
@@ -305,7 +299,7 @@ func TestKVLedgerRecoveryNotUpdateHistoryDb_afterFail(t *testing.T) {
 			testhelper.AssertEquals(t, retrievedValue, expectedValue)
 		}
 		testhelper.AssertEquals(t, count, 1)
-		historyDBSavepoint, _ := ledger.(*kvLedger).historyDB.GetLastSavepoint()
+		historyDBSavepoint, _ := ledger.(*KvLedger).historyDB.GetLastSavepoint()
 		testhelper.AssertEquals(t, historyDBSavepoint.BlockNum, uint64(1))
 	}
 	simulator.Done()
@@ -314,9 +308,8 @@ func TestKVLedgerRecoveryNotUpdateHistoryDb_afterFail(t *testing.T) {
 // 测试场景3：block2已被提交应用于历史数据库，但未被应用于更新世界状态数据库，此场景为罕见场景。
 // 即kvLedger对象的Commit方法只完成了验证区块/向存储文件添加区块/更新历史数据库的工作时，peer"挂"了
 func TestKVLedgerRecoveryRareScenario_beforeFail(t *testing.T) {
-	testhelper.SetupCoreYAMLConfig()
 	// 创建测试环境
-	viper.Set("peer.fileSystemPath", "/tmp/rongzer/test/kvledger3")
+	conf.V.FileSystemPath = "/tmp/rongzer/test/kvledger3"
 	provider, _ := NewProvider()
 	defer provider.Close()
 	// 创建一个"模拟块"生成器
@@ -341,10 +334,10 @@ func TestKVLedgerRecoveryRareScenario_beforeFail(t *testing.T) {
 	simRes, _ = simulator.GetTxSimulationResults()
 	block2 := bg.NextBlock([][]byte{simRes})
 	// kvLedger对象的Commit方法只完成了的这部分工作——验证区块/向存储文件添加区块/更新历史数据库
-	ledger.(*kvLedger).txtmgmt.ValidateAndPrepare(block2, true)
-	err := ledger.(*kvLedger).blockStore.AddBlock(block2)
+	ledger.(*KvLedger).txtmgmt.ValidateAndPrepare(block2, true)
+	err := ledger.(*KvLedger).BlockStore.AddBlock(block2)
 	if ledgerconfig.IsHistoryDBEnabled() == true {
-		err = ledger.(*kvLedger).historyDB.Commit(block2)
+		err = ledger.(*KvLedger).historyDB.Commit(block2)
 	}
 	assert.NoError(t, err)
 	// 检查世界状态数据库是否更新——未更新
@@ -355,7 +348,7 @@ func TestKVLedgerRecoveryRareScenario_beforeFail(t *testing.T) {
 	testhelper.AssertEquals(t, value, []byte("value2.1"))
 	value, _ = simulator.GetState("ns1", "key3")
 	testhelper.AssertEquals(t, value, []byte("value3.1"))
-	stateDBSavepoint, _ := ledger.(*kvLedger).txtmgmt.GetLastSavepoint()
+	stateDBSavepoint, _ := ledger.(*KvLedger).txtmgmt.GetLastSavepoint()
 	testhelper.AssertEquals(t, stateDBSavepoint.BlockNum, uint64(1))
 	// 检查历史数据库是否更新——已更新
 	if ledgerconfig.IsHistoryDBEnabled() == true {
@@ -374,7 +367,7 @@ func TestKVLedgerRecoveryRareScenario_beforeFail(t *testing.T) {
 			testhelper.AssertEquals(t, retrievedValue, expectedValue)
 		}
 		testhelper.AssertEquals(t, count, 2)
-		historyDBSavepoint, _ := ledger.(*kvLedger).historyDB.GetLastSavepoint()
+		historyDBSavepoint, _ := ledger.(*KvLedger).historyDB.GetLastSavepoint()
 		testhelper.AssertEquals(t, historyDBSavepoint.BlockNum, uint64(2))
 	}
 }
@@ -382,9 +375,8 @@ func TestKVLedgerRecoveryRareScenario_beforeFail(t *testing.T) {
 // 假设，这个时候peer"恢复"了，会重新调用NewProvider()函数，此时世界状态数据库会根据块存储文件进行recover，即把block2进行应用，
 // 因为在NewProvider函数中调用了Provider的recoverUnderConstructionLedger方法
 func TestKVLedgerRecoveryRareScenario_afterFail(t *testing.T) {
-	testhelper.SetupCoreYAMLConfig()
 	// 创建测试环境
-	viper.Set("peer.fileSystemPath", "/tmp/rongzer/test/kvledger3")
+	conf.V.FileSystemPath = "/tmp/rongzer/test/kvledger3"
 	defer func() {
 		os.RemoveAll("/tmp/rongzer/test/kvledger3")
 	}()
@@ -400,18 +392,16 @@ func TestKVLedgerRecoveryRareScenario_afterFail(t *testing.T) {
 	testhelper.AssertEquals(t, value, []byte("value2.2"))
 	value, _ = simulator.GetState("ns1", "key3")
 	testhelper.AssertEquals(t, value, []byte("value3.2"))
-	stateDBSavepoint, _ := ledger.(*kvLedger).txtmgmt.GetLastSavepoint()
+	stateDBSavepoint, _ := ledger.(*KvLedger).txtmgmt.GetLastSavepoint()
 	testhelper.AssertEquals(t, stateDBSavepoint.BlockNum, uint64(2))
 	simulator.Done()
 }
 
 // 测试peer账本的创建索引(RList)功能
 func TestKVLedgerIndexState(t *testing.T) {
-	// 读取core.yaml配置文件
-	testhelper.SetupCoreYAMLConfig()
 	// 创建测试环境
 	testPath := "/tmp/rongzer/test/kvledger4"
-	viper.Set("peer.fileSystemPath", testPath)
+	conf.V.FileSystemPath = testPath
 	defer func() {
 		os.RemoveAll(testPath)
 	}()

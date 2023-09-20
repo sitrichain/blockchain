@@ -22,9 +22,10 @@ limitations under the License.
 package cscc
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
-
+	"github.com/rongzer/blockchain/common/cluster"
 	"github.com/rongzer/blockchain/common/config"
 	"github.com/rongzer/blockchain/common/log"
 	"github.com/rongzer/blockchain/common/msp/mgmt"
@@ -56,12 +57,12 @@ const (
 // This allows the chaincode to initialize any variables on the ledger prior
 // to any transaction execution on the chain.
 func (e *PeerConfiger) Init(_ shim.ChaincodeStubInterface) pb.Response {
-	log.Logger.Info("Init CSCC")
+	log.Logger.Debug("Init CSCC")
 
 	// Init policy checker for access control
 	e.policyChecker = policy.NewPolicyChecker(
 		chain.NewChannelPolicyManagerGetter(),
-		mgmt.GetLocalMSP(),
+		mgmt.GetLocalMSPOfPeer(),
 		mgmt.NewLocalMSPPrincipalGetter(),
 	)
 
@@ -91,7 +92,7 @@ func (e *PeerConfiger) Invoke(stub shim.ChaincodeStubInterface) pb.Response {
 		return shim.Error(fmt.Sprintf("Incorrect number of arguments, %d", len(args)))
 	}
 
-	log.Logger.Debugf("Invoke function: %s", fname)
+	log.Logger.Warnf("Invoke function: %s", fname)
 
 	// Handle ACL:
 	// 1. get the signed proposal
@@ -102,33 +103,24 @@ func (e *PeerConfiger) Invoke(stub shim.ChaincodeStubInterface) pb.Response {
 
 	switch fname {
 	case JoinChain:
-		if args[1] == nil {
-			return shim.Error("Cannot join the channel <nil> configuration block provided")
+		if string(args[1]) == "" {
+			return shim.Error("channel name cannot be nil")
 		}
-
-		block, err := utils.GetBlockFromBlockBytes(args[1])
+		// 第一个参数是：通道名
+		cid := string(args[1])
+		// 第二个参数是：新节点加入通道后是否参与该链的共识
+		var participateConsensus bool
+		err = json.Unmarshal(args[2], participateConsensus)
 		if err != nil {
-			return shim.Error(fmt.Sprintf("Failed to reconstruct the genesis block, %s", err))
+			log.Logger.Error("cannot unmarshal the second parameter into bool type")
+			return shim.Error("cannot unmarshal the second parameter into bool type")
 		}
-
-		cid, err := utils.GetChainIDFromBlock(block)
-		if err != nil {
-			return shim.Error(fmt.Sprintf("\"JoinChain\" request failed to extract "+
-				"channel id from the block due to [%s]", err))
-		}
-
-		if err := validateConfigBlock(block); err != nil {
-			return shim.Error(fmt.Sprintf("\"JoinChain\" for chainID = %s failed because of validation "+
-				"of configuration block, because of %s", cid, err))
-		}
-
 		// 2. check local MSP Admins policy
 		if err = e.policyChecker.CheckPolicyNoChannel(mgmt.Admins, sp); err != nil {
 			return shim.Error(fmt.Sprintf("\"JoinChain\" request failed authorization check "+
 				"for channel [%s]: [%s]", cid, err))
 		}
-
-		return joinChain(cid, block)
+		return joinChain(cid, participateConsensus)
 	case GetConfigBlock:
 		// 2. check the channel reader policy
 		if err = e.policyChecker.CheckPolicy(string(args[1]), policies.ChannelApplicationReaders, sp); err != nil {
@@ -184,15 +176,40 @@ func validateConfigBlock(block *common.Block) error {
 // joinChain will join the specified chain in the configuration block.
 // Since it is the first block, it is the genesis block containing configuration
 // for this chain, so we want to update the Chain object with this info
-func joinChain(chainID string, block *common.Block) pb.Response {
-	if err := chain.CreateChainFromBlock(block); err != nil {
-		return shim.Error(err.Error())
+func joinChain(chainID string, participateConsensus bool) pb.Response {
+	if _, created := chain.GetManager().GetChain(chainID); !created {
+		replicator := cluster.TheReplicator
+		// 拉块
+		err := replicator.ReplicateSomeChain(chainID)
+		if err != nil {
+			return shim.Error("cannot pull blocks from other nodes")
+		}
+		// 再创建链
+		m := chain.GetManager()
+		err = m.InitCreateChainAccordingly(chainID, participateConsensus)
+		if err != nil {
+			log.Logger.Errorf("cannot create chain: %v, err is: %v", chainID, err)
+			return shim.Error("cannot join chain for creating chain failed")
+		}
+		channel, ok := m.GetChain(chainID)
+		if ok {
+			channel.Start()
+		}
 	}
-
+	// 初始化该链，即启动系统链码
 	chain.InitChain(chainID)
-
+	// 将创世块作为blockEvent发出去
+	var block *common.Block
+	ledger := chain.GetLedger(chainID)
+	if ledger == nil {
+		return shim.Error(fmt.Sprintf("cannot get ledger of %v", chainID))
+	}
+	block, err := ledger.GetBlockByNumber(0)
+	if err != nil {
+		return shim.Error("cannot get genesis block from ledger")
+	}
 	if err := producer.SendProducerBlockEvent(block); err != nil {
-		log.Logger.Errorf("Error sending block event %s", err)
+		return shim.Error("cannot sending block event")
 	}
 
 	return shim.Success(nil)
@@ -204,7 +221,9 @@ func getConfigBlock(chainID []byte) pb.Response {
 	if chainID == nil {
 		return shim.Error("ChainID must not be nil.")
 	}
-	block := chain.GetCurrConfigBlock(string(chainID))
+	var block *common.Block
+	block = chain.GetCurrConfigBlock(string(chainID))
+
 	if block == nil {
 		return shim.Error(fmt.Sprintf("Unknown chain ID, %s", string(chainID)))
 	}
@@ -218,7 +237,8 @@ func getConfigBlock(chainID []byte) pb.Response {
 
 // getChannels returns information about all channels for this peer
 func getChannels() pb.Response {
-	channelInfoArray := chain.GetChannelsInfo()
+	var channelInfoArray []*pb.ChannelInfo
+	channelInfoArray = chain.GetChannelsInfo()
 
 	// add array with info about all channels for this peer
 	cqr := &pb.ChannelQueryResponse{Channels: channelInfoArray}

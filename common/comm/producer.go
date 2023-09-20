@@ -18,42 +18,36 @@ package comm
 
 import (
 	"fmt"
-	"math/rand"
-	"sync"
-	"time"
-
 	"github.com/rongzer/blockchain/common/log"
 	"google.golang.org/grpc"
+	"sync"
 )
 
 // ConnectionFactory creates a connection to a certain endpoint
 type ConnectionFactory func(endpoint string) (*grpc.ClientConn, error)
 
 // ConnectionProducer produces connections out of a set of predefined
-// endpoints
+// endpoint
 type ConnectionProducer interface {
 	// NewConnection creates a new connection.
 	// Returns the connection, the endpoint selected, nil on success.
 	// Returns nil, "", error on failure
 	NewConnection() (*grpc.ClientConn, string, error)
-	// UpdateEndpoints updates the endpoints of the ConnectionProducer
-	// to be the given endpoints
-	UpdateEndpoints(endpoints []string)
 }
 
 type connProducer struct {
 	sync.RWMutex
-	endpoints []string
-	connect   ConnectionFactory
+	endpoint string
+	connect  ConnectionFactory
 }
 
-// NewConnectionProducer creates a new ConnectionProducer with given endpoints and connection factory.
-// It returns nil, if the given endpoints slice is empty.
-func NewConnectionProducer(factory ConnectionFactory, endpoints []string) ConnectionProducer {
-	if len(endpoints) == 0 {
+// NewConnectionProducer creates a new ConnectionProducer with given endpoint and connection factory.
+// It returns nil, if the given endpoint slice is empty.
+func NewConnectionProducer(factory ConnectionFactory, endpoint string) ConnectionProducer {
+	if len(endpoint) == 0 {
 		return nil
 	}
-	return &connProducer{endpoints: endpoints, connect: factory}
+	return &connProducer{endpoint: endpoint, connect: factory}
 }
 
 // NewConnection creates a new connection.
@@ -63,37 +57,11 @@ func (cp *connProducer) NewConnection() (*grpc.ClientConn, string, error) {
 	cp.RLock()
 	defer cp.RUnlock()
 
-	endpoints := shuffle(cp.endpoints)
-	for _, endpoint := range endpoints {
-		conn, err := cp.connect(endpoint)
-		if err != nil {
-			log.Logger.Error("Failed connecting to", endpoint, ", error:", err)
-			continue
-		}
-		return conn, endpoint, nil
+	conn, err := cp.connect(cp.endpoint)
+	if err != nil {
+		log.Logger.Errorf("Failed connecting to %v, err is: %v", cp.endpoint, err)
+		return nil, "", fmt.Errorf("Could not connect to the endpoint: %v", cp.endpoint)
 	}
-	return nil, "", fmt.Errorf("Could not connect to any of the endpoints: %v", endpoints)
+	return conn, cp.endpoint, nil
 }
 
-// UpdateEndpoints updates the endpoints of the ConnectionProducer
-// to be the given endpoints
-func (cp *connProducer) UpdateEndpoints(endpoints []string) {
-	if len(endpoints) == 0 {
-		// Ignore updates with empty endpoints
-		return
-	}
-	cp.Lock()
-	defer cp.Unlock()
-	cp.endpoints = endpoints
-}
-
-func shuffle(a []string) []string {
-	n := len(a)
-	returnedSlice := make([]string, n)
-	rand.Seed(time.Now().UnixNano())
-	indices := rand.Perm(n)
-	for i, idx := range indices {
-		returnedSlice[i] = a[idx]
-	}
-	return returnedSlice
-}

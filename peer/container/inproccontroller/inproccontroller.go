@@ -108,7 +108,7 @@ func (ipc *inprocContainer) launchInProc(ctxt context.Context, id string, args [
 	ccsupportchan := make(chan struct{}, 1)
 	go func() {
 		defer close(ccchan)
-		log.Logger.Infof("chaincode started for %s", id)
+		log.Logger.Debugf("chaincode started for %s", id)
 		if args == nil {
 			args = ipc.args
 		}
@@ -127,7 +127,7 @@ func (ipc *inprocContainer) launchInProc(ctxt context.Context, id string, args [
 	go func() {
 		defer close(ccsupportchan)
 		inprocStream := newInProcStream(peerRcvCCSend, ccRcvPeerSend)
-		log.Logger.Infof("chaincode-support started for  %s", id)
+		log.Logger.Debugf("chaincode-support started for  %s", id)
 		err := ccSupport.HandleChaincodeStream(ctxt, inprocStream)
 		if err != nil {
 			err = fmt.Errorf("chaincode ended with err: %s", err)

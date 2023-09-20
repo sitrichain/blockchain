@@ -1,39 +1,20 @@
-/*
-Copyright IBM Corp. 2016 All Rights Reserved.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
-		 http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
-
 package ledgerconfig
 
 import (
 	"path/filepath"
 
-	"github.com/rongzer/blockchain/peer/config"
-	"github.com/spf13/viper"
+	"github.com/rongzer/blockchain/common/conf"
 )
 
 // GetRootPath returns the filesystem path.
 // All ledger related contents are expected to be stored under this path
 func GetRootPath() string {
-	sysPath := config.GetPath("peer.fileSystemPath")
-	return filepath.Join(sysPath, "ledgersData")
+	return filepath.Join(conf.V.FileSystemPath, "ledgersData")
 }
 
 // GetLedgerProviderPath returns the filesystem path for stroing ledger ledgerProvider contents
 func GetLedgerProviderPath() string {
-	dbtype := viper.GetString("ledger.state.stateDatabase")
-	if dbtype == "rocksdb" {
+	if conf.V.Ledger.StateDatabase == "rocksdb" {
 		return filepath.Join(GetRootPath(), "ledgerProviderRocksdb")
 	}
 	return filepath.Join(GetRootPath(), "ledgerProviderLeveldb")
@@ -81,8 +62,7 @@ func GetHistoryRocksDBPath() string {
 
 // GetBlockStorePath returns the filesystem path that is used for the chain block stores
 func GetBlockStorePath() string {
-	dbtype := viper.GetString("ledger.state.stateDatabase")
-	if dbtype == "rocksdb" {
+	if conf.V.Ledger.StateDatabase == "rocksdb" {
 		return filepath.Join(GetRootPath(), "chainsRocksdb")
 	}
 	return filepath.Join(GetRootPath(), "chains")
@@ -95,7 +75,7 @@ func GetMaxBlockfileSize() int {
 
 //IsHistoryDBEnabled exposes the historyDatabase variable
 func IsHistoryDBEnabled() bool {
-	return viper.GetBool("ledger.history.enableHistoryDatabase")
+	return conf.V.Ledger.EnableHistoryDatabase
 }
 
 // IsQueryReadsHashingEnabled enables or disables computing of hash

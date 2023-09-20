@@ -1,10 +1,10 @@
 package stateleveldb
 
 import (
-	"github.com/spf13/viper"
 	"os"
 	"testing"
 
+	"github.com/rongzer/blockchain/common/conf"
 	"github.com/rongzer/blockchain/common/testhelper"
 	"github.com/rongzer/blockchain/peer/ledger/kvledger/txmgmt/statedb"
 	"github.com/rongzer/blockchain/peer/ledger/kvledger/txmgmt/version"
@@ -13,9 +13,8 @@ import (
 // TestGetStateMultipleKeys tests read for given multiple keys
 func TestGetStateMultipleKeys(t *testing.T) {
 	// 创建测试环境
-	testhelper.SetupCoreYAMLConfig()
 	testPath := "/tmp/rongzer/test/stateleveldb"
-	viper.Set("peer.fileSystemPath", testPath)
+	conf.V.FileSystemPath = testPath
 
 	dbProvider := NewVersionedDBProvider()
 	defer func() {
@@ -52,9 +51,8 @@ func TestGetStateMultipleKeys(t *testing.T) {
 // TestBasicRW tests basic read-write
 func TestBasicRW(t *testing.T) {
 	// 创建测试环境
-	testhelper.SetupCoreYAMLConfig()
 	testPath := "/tmp/rongzer/test/stateleveldb1"
-	viper.Set("peer.fileSystemPath", testPath)
+	conf.V.FileSystemPath = testPath
 
 	dbProvider := NewVersionedDBProvider()
 	defer func() {
@@ -99,9 +97,8 @@ func TestBasicRW(t *testing.T) {
 // TestMultiDBBasicRW tests basic read-write on multiple dbs
 func TestMultiDBBasicRW(t *testing.T) {
 	// 创建测试环境
-	testhelper.SetupCoreYAMLConfig()
 	testPath := "/tmp/rongzer/test/stateleveldb2"
-	viper.Set("peer.fileSystemPath", testPath)
+	conf.V.FileSystemPath = testPath
 
 	dbProvider := NewVersionedDBProvider()
 	defer func() {
@@ -149,9 +146,8 @@ func TestMultiDBBasicRW(t *testing.T) {
 // TestDeletes tests deteles
 func TestDeletes(t *testing.T) {
 	// 创建测试环境
-	testhelper.SetupCoreYAMLConfig()
 	testPath := "/tmp/rongzer/test/stateleveldb3"
-	viper.Set("peer.fileSystemPath", testPath)
+	conf.V.FileSystemPath = testPath
 
 	dbProvider := NewVersionedDBProvider()
 	defer func() {
@@ -195,9 +191,8 @@ func TestDeletes(t *testing.T) {
 // TestIterator tests the iterator
 func TestIterator(t *testing.T) {
 	// 创建测试环境
-	testhelper.SetupCoreYAMLConfig()
 	testPath := "/tmp/rongzer/test/stateleveldb4"
-	viper.Set("peer.fileSystemPath", testPath)
+	conf.V.FileSystemPath = testPath
 
 	dbProvider := NewVersionedDBProvider()
 	defer func() {

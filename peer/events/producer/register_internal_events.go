@@ -44,6 +44,8 @@ func getMessageType(e *pb.Event) pb.EventType {
 		return pb.EventType_SUCCESS
 	case *pb.Event_Rejection:
 		return pb.EventType_REJECTION
+	case *pb.Event_Heartbeat:
+		return pb.EventType_HEARTBEAT
 	default:
 		return -1
 	}
@@ -56,4 +58,5 @@ func addInternalEventTypes() {
 	AddEventType(pb.EventType_REJECTION)
 	AddEventType(pb.EventType_REGISTER)
 	AddEventType(pb.EventType_SUCCESS)
+	AddEventType(pb.EventType_HEARTBEAT)
 }

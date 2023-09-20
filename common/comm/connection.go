@@ -66,7 +66,7 @@ func (cas *CASupport) GetServerRootCAs() (appRootCAs, ordererRootCAs [][]byte) {
 }
 
 // GetDeliverServiceCredentials returns GRPC transport credentials for given channel to be used by GRPC
-// clients which communicate with ordering service endpoints.
+// clients which communicate with ordering service endpoint.
 // If the channel isn't found, error is returned.
 func (cas *CASupport) GetDeliverServiceCredentials(channelID string) (credentials.TransportCredentials, error) {
 	cas.RLock()
@@ -101,7 +101,7 @@ func (cas *CASupport) GetDeliverServiceCredentials(channelID string) (credential
 }
 
 // GetPeerCredentials returns GRPC transport credentials for use by GRPC
-// clients which communicate with remote peer endpoints.
+// clients which communicate with remote peer endpoint.
 func (cas *CASupport) GetPeerCredentials(tlsCert tls.Certificate) credentials.TransportCredentials {
 	var creds credentials.TransportCredentials
 	var tlsConfig = &tls.Config{

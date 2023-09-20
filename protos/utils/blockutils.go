@@ -17,9 +17,12 @@ limitations under the License.
 package utils
 
 import (
+	"bytes"
+	"crypto/sha256"
+	"encoding/asn1"
 	"fmt"
-
 	cb "github.com/rongzer/blockchain/protos/common"
+	"math/big"
 )
 
 // GetChainIDFromBlockBytes returns chain ID given byte array which represents the block
@@ -98,4 +101,40 @@ func InitBlockMetadata(block *cb.Block) {
 			block.Metadata.Metadata = append(block.Metadata.Metadata, []byte{})
 		}
 	}
+}
+
+func BlockHeaderHash(b *cb.BlockHeader) []byte {
+	bhkBytes, err := b.Marshal()
+	if err != nil {
+		return nil
+	}
+	sum := sha256.Sum256(bhkBytes)
+	return sum[:]
+}
+
+func BlockDataHash(b *cb.BlockData) []byte {
+	sum := sha256.Sum256(bytes.Join(b.Data, nil))
+	return sum[:]
+}
+
+type asn1Header struct {
+	Number       *big.Int
+	PreviousHash []byte
+	DataHash     []byte
+}
+
+func BlockHeaderBytes(b *cb.BlockHeader) []byte {
+	asn1Header := asn1Header{
+		PreviousHash: b.PreviousHash,
+		DataHash:     b.DataHash,
+		Number:       new(big.Int).SetUint64(b.Number),
+	}
+	result, err := asn1.Marshal(asn1Header)
+	if err != nil {
+		// Errors should only arise for types which cannot be encoded, since the
+		// BlockHeader type is known a-priori to contain only encodable types, an
+		// error here is fatal and should not be propogated
+		panic(err)
+	}
+	return result
 }

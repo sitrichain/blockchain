@@ -34,8 +34,10 @@ var ErrLedgerAlreadyOpened = errors.New("Ledger already opened")
 // ErrLedgerMgmtNotInitialized is thrown when ledger mgmt is used before initializing this
 var ErrLedgerMgmtNotInitialized = errors.New("ledger mgmt should be initialized before using")
 
-var openedLedgers map[string]ledger.PeerLedger
-var ledgerProvider ledger.PeerLedgerProvider
+//var OpenedLedgers map[string]ledger.PeerLedger
+var OpenedLedgers sync.Map   // map[string]ledger.PeerLedger
+var SignaledLedgers sync.Map //map[string]*ledger.SignaledLedger
+var LedgerProvider ledger.PeerLedgerProvider
 var lock sync.Mutex
 var initialized bool
 var once sync.Once
@@ -52,12 +54,11 @@ func initialize() {
 	lock.Lock()
 	defer lock.Unlock()
 	initialized = true
-	openedLedgers = make(map[string]ledger.PeerLedger)
 	provider, err := kvledger.NewProvider()
 	if err != nil {
 		panic(fmt.Errorf("Error in instantiating ledger provider: %s", err))
 	}
-	ledgerProvider = provider
+	LedgerProvider = provider
 	log.Logger.Info("ledger mgmt initialized")
 }
 
@@ -76,12 +77,13 @@ func CreateLedger(genesisBlock *common.Block) (ledger.PeerLedger, error) {
 	}
 
 	log.Logger.Infof("Creating ledger [%s] with genesis block", id)
-	l, err := ledgerProvider.Create(genesisBlock)
+	l, err := LedgerProvider.Create(genesisBlock)
 	if err != nil {
 		return nil, err
 	}
 	l = wrapLedger(id, l)
-	openedLedgers[id] = l
+	OpenedLedgers.Store(id, l)
+
 	log.Logger.Infof("Created ledger [%s] with genesis block", id)
 	return l, nil
 }
@@ -94,16 +96,16 @@ func OpenLedger(id string) (ledger.PeerLedger, error) {
 	if !initialized {
 		return nil, ErrLedgerMgmtNotInitialized
 	}
-	l, ok := openedLedgers[id]
+	_, ok := OpenedLedgers.Load(id)
 	if ok {
 		return nil, ErrLedgerAlreadyOpened
 	}
-	l, err := ledgerProvider.Open(id)
+	l, err := LedgerProvider.Open(id)
 	if err != nil {
 		return nil, err
 	}
 	l = wrapLedger(id, l)
-	openedLedgers[id] = l
+	OpenedLedgers.Store(id, l)
 	log.Logger.Infof("Opened ledger with id = %s", id)
 	return l, nil
 }
@@ -115,7 +117,30 @@ func GetLedgerIDs() ([]string, error) {
 	if !initialized {
 		return nil, ErrLedgerMgmtNotInitialized
 	}
-	return ledgerProvider.List()
+	return LedgerProvider.List()
+}
+
+func GetSignaledLedger(chainID string) (*kvledger.SignaledLedger, error) {
+	// 获取链的账本
+	ledger, ok := SignaledLedgers.Load(chainID)
+	if !ok {
+		l, err := LedgerProvider.CreateWithChainID(chainID)
+		if err != nil {
+			return nil, err
+		}
+		kvLedger, ok := l.(*kvledger.KvLedger)
+		if !ok {
+			return nil, fmt.Errorf("peerLedger cannot convert to kvLedger for chainID %s", chainID)
+		}
+		signaledLedger := &kvledger.SignaledLedger{KvLedger: kvLedger, Signal: make(chan struct{})}
+		SignaledLedgers.Store(chainID, signaledLedger)
+		return signaledLedger, nil
+	}
+	signaledLedger, ok := ledger.(*kvledger.SignaledLedger)
+	if !ok {
+		return nil, fmt.Errorf("Found exist chainID %s but could not retrieve its ledger.", chainID)
+	}
+	return signaledLedger, nil
 }
 
 func wrapLedger(id string, l ledger.PeerLedger) ledger.PeerLedger {
@@ -137,7 +162,7 @@ func (l *closableLedger) Close() {
 
 func (l *closableLedger) closeWithoutLock() {
 	l.PeerLedger.Close()
-	delete(openedLedgers, l.id)
+	OpenedLedgers.Delete(l.id)
 }
 
 // Close closes all the opened ledgers and any resources held for ledger management
@@ -148,10 +173,10 @@ func Close() {
 	if !initialized {
 		return
 	}
-	for _, l := range openedLedgers {
-		l.(*closableLedger).closeWithoutLock()
-	}
-	ledgerProvider.Close()
-	openedLedgers = nil
+	OpenedLedgers.Range(func(key, value interface{}) bool {
+		value.(*closableLedger).closeWithoutLock()
+		return true
+	})
+	LedgerProvider.Close()
 	log.Logger.Infof("ledger mgmt closed")
 }

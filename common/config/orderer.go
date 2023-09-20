@@ -1,19 +1,3 @@
-/*
-Copyright IBM Corp. 2016 All Rights Reserved.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
-                 http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
-
 package config
 
 import (
@@ -26,7 +10,6 @@ import (
 	"github.com/rongzer/blockchain/common/config/msp"
 	"github.com/rongzer/blockchain/common/log"
 	ab "github.com/rongzer/blockchain/protos/orderer"
-	"github.com/spf13/viper"
 )
 
 const (
@@ -121,6 +104,11 @@ func (oc *OrdererConfig) ConsensusType() string {
 	return oc.protos.ConsensusType.Type
 }
 
+// ConsensusMetadata returns the metadata associated with the consensus type.
+func (oc *OrdererConfig) ConsensusMetadata() []byte {
+	return oc.protos.ConsensusType.Metadata
+}
+
 // BatchSize returns the maximum number of messages to include in a block
 func (oc *OrdererConfig) BatchSize() *ab.BatchSize {
 	return oc.protos.BatchSize
@@ -129,20 +117,6 @@ func (oc *OrdererConfig) BatchSize() *ab.BatchSize {
 // BatchTimeout returns the amount of time to wait before creating a batch
 func (oc *OrdererConfig) BatchTimeout() time.Duration {
 	return oc.batchTimeout
-}
-
-// KafkaBrokers returns the addresses (IP:port notation) of a set of "bootstrap"
-// Kafka brokers, i.e. this is not necessarily the entire set of Kafka brokers
-// used for ordering
-func (oc *OrdererConfig) KafkaBrokers() []string {
-	// 配置kafka地址
-	brokers := viper.GetString("kafka.brokers")
-
-	if len(brokers) > 5 {
-		log.Logger.Infof("kafka Brokers addresses %s", brokers)
-		return strings.Split(brokers, ",")
-	}
-	return oc.protos.KafkaBrokers.Brokers
 }
 
 // MaxChainsCount returns the maximum count of channels this orderer supports

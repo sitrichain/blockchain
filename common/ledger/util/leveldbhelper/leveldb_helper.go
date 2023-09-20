@@ -189,7 +189,11 @@ type Iterator struct {
 }
 
 func retrieveAppKey(levelKey []byte) []byte {
-	return bytes.SplitN(levelKey, dbNameKeySep, 2)[1]
+	s := bytes.SplitN(levelKey, dbNameKeySep, 2)
+	if len(s) <= 1 {
+		return levelKey
+	}
+	return s[1]
 }
 
 // Key wraps actual leveldb iterator method

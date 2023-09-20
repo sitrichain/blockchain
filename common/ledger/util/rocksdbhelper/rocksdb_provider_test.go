@@ -1,18 +1,14 @@
 package rocksdbhelper
 
 import (
-	"github.com/rongzer/blockchain/common/ledger/util"
-	"github.com/spf13/viper"
 	"os"
 	"testing"
+
+	"github.com/rongzer/blockchain/common/ledger/util"
 )
 
 // 测试Provider和DBHandle相关方法
 func TestProvider(t *testing.T) {
-	viper.SetConfigFile("../../../../sampleconfig/core.yaml")
-	if err := viper.ReadInConfig(); err != nil {
-		t.Fatal("cannot read from configure file")
-	}
 	p := GetProvider("/tmp/rongzer/test/rocksdbhelper")
 	defer func() {
 		p.Close()

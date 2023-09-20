@@ -19,6 +19,7 @@ package chaincode
 import (
 	"bytes"
 	"fmt"
+	"github.com/rongzer/blockchain/peer/chain"
 	"io"
 	"strings"
 	"sync"
@@ -31,7 +32,6 @@ import (
 	"github.com/rongzer/blockchain/common/msp/mgmt"
 	"github.com/rongzer/blockchain/common/policies"
 	"github.com/rongzer/blockchain/common/util"
-	"github.com/rongzer/blockchain/peer/chain"
 	"github.com/rongzer/blockchain/peer/common/ccprovider"
 	"github.com/rongzer/blockchain/peer/common/sysccprovider"
 	"github.com/rongzer/blockchain/peer/container/ccintf"
@@ -465,7 +465,7 @@ func newChaincodeSupportHandler(chaincodeSupport *ChaincodeSupport, peerChatStre
 
 	v.policyChecker = policy.NewPolicyChecker(
 		chain.NewChannelPolicyManagerGetter(),
-		mgmt.GetLocalMSP(),
+		mgmt.GetLocalMSPOfPeer(),
 		mgmt.NewLocalMSPPrincipalGetter(),
 	)
 

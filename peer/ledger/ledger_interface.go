@@ -30,6 +30,8 @@ type PeerLedgerProvider interface {
 	// This function guarantees that the creation of ledger and committing the genesis block would an atomic action
 	// The chain id retrieved from the genesis block is treated as a ledger id
 	Create(genesisBlock *common.Block) (PeerLedger, error)
+	CreateWithoutCommit(genesisBlock *common.Block) (PeerLedger, error)
+	CreateWithChainID(chainId string) (PeerLedger, error)
 	// Open opens an already created ledger
 	Open(ledgerID string) (PeerLedger, error)
 	// Exists tells whether the ledger with given id exists
@@ -68,6 +70,8 @@ type PeerLedger interface {
 	GetBlockByHash(blockHash []byte) (*common.Block, error)
 	// GetBlockByTxID returns a block which contains a transaction
 	GetBlockByTxID(txID string) (*common.Block, error)
+	// GetAttachById 返回attach 根据传进来的key值
+	GetAttachById(key string) (string, error)
 	// GetTxValidationCodeByTxID returns reason code of transaction validation
 	GetTxValidationCodeByTxID(txID string) (peer.TxValidationCode, error)
 	// 获取交易验证结果

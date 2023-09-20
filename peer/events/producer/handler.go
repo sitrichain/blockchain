@@ -23,6 +23,7 @@ import (
 	"github.com/rongzer/blockchain/common/log"
 	"github.com/rongzer/blockchain/common/msp/mgmt"
 	pb "github.com/rongzer/blockchain/protos/peer"
+	"github.com/golang/protobuf/proto"
 )
 
 type handler struct {
@@ -50,6 +51,8 @@ func getInterestKey(interest pb.Interest) string {
 	switch interest.EventType {
 	case pb.EventType_BLOCK:
 		key = "/" + strconv.Itoa(int(pb.EventType_BLOCK))
+	case pb.EventType_HEARTBEAT:
+		key = "/" + strconv.Itoa(int(pb.EventType_HEARTBEAT))
 	case pb.EventType_REJECTION:
 		key = "/" + strconv.Itoa(int(pb.EventType_REJECTION))
 	case pb.EventType_SUCCESS:
@@ -154,11 +157,11 @@ func validateEventMessage(signedEvt *pb.SignedEvent) (*pb.Event, error) {
 	// messages from the client for registering and unregistering must be signed
 	// and accompanied by the signing certificate in the "Creator" field
 	evt := &pb.Event{}
-	if err := evt.Unmarshal(signedEvt.EventBytes); err != nil {
+	if err := proto.Unmarshal(signedEvt.EventBytes, evt); err != nil {
 		return nil, fmt.Errorf("error unmarshaling the event bytes in the SignedEvent: %s", err)
 	}
 
-	localMSP := mgmt.GetLocalMSP()
+	localMSP := mgmt.GetLocalMSPOfPeer()
 	principalGetter := mgmt.NewLocalMSPPrincipalGetter()
 
 	// Load MSPPrincipal for policy

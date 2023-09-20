@@ -2,15 +2,20 @@ package endorser
 
 import (
 	"fmt"
+	"github.com/pkg/errors"
 	"strconv"
 
 	"github.com/golang/protobuf/proto"
+	"github.com/rongzer/blockchain/common/comm"
+	"github.com/rongzer/blockchain/common/conf"
+	"github.com/rongzer/blockchain/common/localmsp"
 	"github.com/rongzer/blockchain/common/log"
 	"github.com/rongzer/blockchain/common/msp"
 	"github.com/rongzer/blockchain/peer/broadcastclient"
 	"github.com/rongzer/blockchain/peer/chain"
 	"github.com/rongzer/blockchain/peer/chaincode"
 	"github.com/rongzer/blockchain/peer/chaincode/shim"
+	"github.com/rongzer/blockchain/peer/dispatcher"
 	"github.com/rongzer/blockchain/peer/endorser/executor"
 	"github.com/rongzer/blockchain/peer/endorser/validator"
 	"github.com/rongzer/blockchain/peer/events/producer"
@@ -20,7 +25,6 @@ import (
 	ab "github.com/rongzer/blockchain/protos/orderer"
 	pb "github.com/rongzer/blockchain/protos/peer"
 	putils "github.com/rongzer/blockchain/protos/utils"
-	"github.com/spf13/viper"
 	"go.uber.org/zap"
 	"golang.org/x/net/context"
 )
@@ -29,6 +33,8 @@ const (
 	EndorseSuccess = 5
 	EndorseFailed  = 6
 )
+
+var ch = make(chan int, conf.V.Peer.ProcessEndorserNum)  // 并发背书数量限制，通道加锁
 
 // >>>>> begin errors section >>>>>
 //chaincodeError is a blockchain error signifying error from chaincode
@@ -45,26 +51,34 @@ func (ce chaincodeError) Error() string {
 type Endorser struct {
 	validator *validator.Validator
 	executor  *executor.Executor
-	// 从orderer过来的背书通道
+	// 从Sealer过来的背书通道
 	endorserChan chan *common.RBCMessage
 	peerAddress  string
+	// 添加httpclient
+	httpClient   *comm.HttpClient
+	chainManager *chain.Manager
+	processor    *configUpdateProcessor
+	distributor  dispatcher.Distributor
 }
 
 // NewEndorserServer creates and returns a new Endorser server instance.
 func NewEndorserServer() pb.EndorserServer {
 	e := new(Endorser)
-
 	e.validator = validator.NewValidator()
 	e.executor = executor.NewExecutor()
-	e.endorserChan = make(chan *common.RBCMessage, 5000)
-	e.peerAddress = viper.GetString("peer.address")
-
+	e.endorserChan = make(chan *common.RBCMessage, conf.V.Peer.EndorserBufferSize)
+	e.peerAddress = conf.V.Peer.Endpoint
+	e.httpClient = comm.NewHttpClient()
+	e.chainManager = chain.GetManager()
+	e.processor = newConfigUpdateProcessor(e.chainManager, localmsp.NewSigner())
+	e.distributor = dispatcher.GetRaftDistributor()
 	go e.execEndorser()
 	return e
 }
 
 func (*Endorser) getTxSimulator(ledgername string) (ledger.TxSimulator, error) {
-	lgr := chain.GetLedger(ledgername)
+	var lgr ledger.PeerLedger
+	lgr = chain.GetLedger(ledgername)
 	if lgr == nil {
 		return nil, fmt.Errorf("channel does not exist: %s", ledgername)
 	}
@@ -72,7 +86,8 @@ func (*Endorser) getTxSimulator(ledgername string) (ledger.TxSimulator, error) {
 }
 
 func (*Endorser) getHistoryQueryExecutor(ledgername string) (ledger.HistoryQueryExecutor, error) {
-	lgr := chain.GetLedger(ledgername)
+	var lgr ledger.PeerLedger
+	lgr = chain.GetLedger(ledgername)
 	if lgr == nil {
 		return nil, fmt.Errorf("channel does not exist: %s", ledgername)
 	}
@@ -88,7 +103,8 @@ func (e *Endorser) commitTxSimulation(proposal *pb.Proposal, chainID string, sig
 		return err
 	}
 
-	lgr := chain.GetLedger(chainID)
+	var lgr ledger.PeerLedger
+	lgr = chain.GetLedger(chainID)
 	if lgr == nil {
 		return fmt.Errorf("failure while looking up the ledger")
 	}
@@ -192,7 +208,7 @@ func (e *Endorser) ProcessProposal(ctx context.Context, signedProp *pb.SignedPro
 	return pResp, nil
 }
 
-// 接收交易，交通过orderer分发
+// 接收交易，交易通过orderer分发
 func (e *Endorser) SendTransaction(_ context.Context, rbcMessage *common.RBCMessage) (*pb.ProposalResponse, error) {
 	logger := log.Logger.With(zap.String("TxID", rbcMessage.TxID), zap.Int32("type", rbcMessage.Type))
 	defer func() {
@@ -203,19 +219,21 @@ func (e *Endorser) SendTransaction(_ context.Context, rbcMessage *common.RBCMess
 
 	switch rbcMessage.Type {
 	case 0:
-		return e.createChain(logger, rbcMessage)
+		return e.createChain(logger, rbcMessage) //raft下无需走grpc，本地调用即可
 	case 1:
-		return e.getBlock(logger, rbcMessage)
+		return e.getBlock(logger, rbcMessage) //raft下无需走grpc，本地调用即可
 	case 3:
-		return e.sendEndorsement(logger, rbcMessage)
+		return e.sendEndorsement(logger, rbcMessage) //raft下无需走grpc，本地调用即可
 	case 4:
-		return e.receiveEndorsement(rbcMessage)
+		return e.receiveEndorsement(rbcMessage) // 分情况讨论
 	case 7:
 		return e.endorseResponse(logger, rbcMessage)
 	case 21:
-		return e.sendHttpRequest(logger, rbcMessage)
+		return e.sendHttpRequest(logger, rbcMessage) //raft下无需走grpc，本地调用即可
 	case 23:
-		return e.getUnendorsedCount(logger, rbcMessage)
+		return e.getUnendorsedCount(logger, rbcMessage) //raft下无需走grpc转发
+	case 24:
+		return e.getAttach(logger, rbcMessage) //raft下无需走grpc转发
 	case 25:
 		return e.handleDeliverMessage(logger, rbcMessage)
 	default:
@@ -225,13 +243,7 @@ func (e *Endorser) SendTransaction(_ context.Context, rbcMessage *common.RBCMess
 
 func (e *Endorser) createChain(logger *zap.SugaredLogger, rbcMessage *common.RBCMessage) (*pb.ProposalResponse, error) {
 	logger.Debug("createChain with rbcmessage :  ", rbcMessage)
-	// 发送给Orderer
-	res, err := broadcastclient.GetCommunicateOrderer().SendToOrderer(rbcMessage)
-	if err != nil {
-		log.Logger.Errorf("Rejecting createChain message because of send to orderer error. %s", err)
-		return nil, err
-	}
-
+	res := e.createChainImplement(logger, rbcMessage)
 	buf, err := res.Marshal()
 	if err != nil {
 		log.Logger.Errorf("Rejecting createChain message because of marshal result error. %s", err)
@@ -242,23 +254,22 @@ func (e *Endorser) createChain(logger *zap.SugaredLogger, rbcMessage *common.RBC
 }
 
 func (e *Endorser) getBlock(logger *zap.SugaredLogger, rbcMessage *common.RBCMessage) (*pb.ProposalResponse, error) {
-	logger.Debug("getBlock with rbcmessage :  ", rbcMessage)
-
-	lgr := chain.GetLedger(rbcMessage.ChainID)
+	logger.Debugf("getBlock with rbcmessage : %v", rbcMessage)
+	var lgr ledger.PeerLedger
+	lgr = chain.GetLedger(rbcMessage.ChainID)
+	var bnum uint64
 	if lgr != nil {
-		bnum := uint64(0)
 		if rbcMessage.Extend == "LAST" {
 			blockchainInfo, _ := lgr.GetBlockchainInfo()
-			bnum = blockchainInfo.Height
+			bnum = blockchainInfo.Height - 1
 		} else {
 			bnum, _ = strconv.ParseUint(rbcMessage.Extend, 10, 64)
 		}
-
 		if bnum >= 0 {
 			block, err := lgr.GetBlockByNumber(bnum)
 			if block != nil && err == nil {
 				blockBuf, err := block.Marshal()
-				if err == nil && blockBuf != nil { //block异常
+				if err == nil && blockBuf != nil {
 					bcRes := &ab.BroadcastResponse{Status: common.Status_SUCCESS, Data: blockBuf}
 					buf, err := bcRes.Marshal()
 					if err == nil && buf != nil {
@@ -268,20 +279,12 @@ func (e *Endorser) getBlock(logger *zap.SugaredLogger, rbcMessage *common.RBCMes
 			}
 		}
 	}
-
-	// 发送给Orderer
-	res, err := broadcastclient.GetCommunicateOrderer().SendToOrderer(rbcMessage)
-	if err != nil {
-		log.Logger.Errorf("Rejecting getBlock message because send to orderer error %s", err)
-		return nil, err
-	}
-
+	res := &ab.BroadcastResponse{Status: common.Status_NOT_FOUND}
 	buf, err := res.Marshal()
 	if err != nil {
 		log.Logger.Errorf("Rejecting getBlock message because marshal result error %s", err)
 		return nil, err
 	}
-
 	return &pb.ProposalResponse{Response: &pb.Response{Status: 200, Message: "send transaction success"}, Payload: buf}, nil
 }
 
@@ -294,11 +297,7 @@ func (e *Endorser) sendEndorsement(logger *zap.SugaredLogger, rbcMessage *common
 
 	var buf []byte
 	var err error
-	res, err := broadcastclient.GetCommunicateOrderer().SendToOrderer(rbcMessage)
-	if err != nil {
-		logger.Error(err)
-		return nil, err
-	}
+	res := e.endorseProposal(logger, rbcMessage)
 	buf, err = res.Marshal()
 	if err != nil {
 		logger.Error(err)
@@ -336,17 +335,11 @@ func (e *Endorser) endorseResponse(logger *zap.SugaredLogger, rbcMessage *common
 }
 
 func (e *Endorser) sendHttpRequest(logger *zap.SugaredLogger, rbcMessage *common.RBCMessage) (*pb.ProposalResponse, error) {
-
 	response := &pb.ProposalResponse{Response: &pb.Response{Status: 200, Message: "send transaction success"}}
-
-	res, err := broadcastclient.GetCommunicateOrderer().SendToOrderer(rbcMessage)
-	if err != nil {
-		logger.Errorf("send exec transaction to orderer %v,err:%s", res, err)
-		return nil, err
-	}
+	res := e.sendHttpRequestImplement(logger, rbcMessage)
 	buf, err := res.Marshal()
 	if err != nil {
-		logger.Errorf("send exec transaction to orderer %v,err:%s", res, err)
+		logger.Errorf("Rejecting sendHttpRequest message because of marshal result error. %v", err)
 		return nil, err
 	}
 	response.Payload = buf
@@ -355,16 +348,49 @@ func (e *Endorser) sendHttpRequest(logger *zap.SugaredLogger, rbcMessage *common
 }
 
 func (e *Endorser) getUnendorsedCount(logger *zap.SugaredLogger, rbcMessage *common.RBCMessage) (*pb.ProposalResponse, error) {
-
 	response := &pb.ProposalResponse{Response: &pb.Response{Status: 200, Message: "send transaction success"}}
+	buf := []byte(strconv.Itoa(e.distributor.GetUnendorseCount()))
+	response.Payload = buf
 
-	res, err := broadcastclient.GetCommunicateOrderer().SendToOrderer(rbcMessage)
+	return response, nil
+}
+
+func (e *Endorser) getAttach(logger *zap.SugaredLogger, rbcMessage *common.RBCMessage) (*pb.ProposalResponse, error) {
+	response := &pb.ProposalResponse{Response: &pb.Response{Status: 200, Message: "send transaction success"}}
+	var lgr ledger.PeerLedger
+	lgr = chain.GetLedger(rbcMessage.ChainID)
+	if lgr == nil {
+		return nil, fmt.Errorf("no ledger ready for chain: %v", rbcMessage.ChainID)
+	}
+	if len(rbcMessage.Data) <= 0 {
+		return nil, errors.New("invalid attach key")
+	}
+
+	key := string(rbcMessage.Data)
+	attachBytes, err := lgr.GetAttachById(key)
 	if err != nil {
-		logger.Errorf("send exec transaction to orderer %v,err:%s", res, err)
 		return nil, err
 	}
-	response.Payload = res.Data
 
+	// 为256位长度的hash值
+	if len(attachBytes) == 256 {
+		attachUrl := "localhost:8880/getAttach"
+
+		// 请求clob字段服务器获取数据返回
+		httpRequest := &common.RBCHttpRequest{Method: "GET", Endpoint: attachUrl}
+		params := make(map[string]string)
+		params["key"] = string(attachBytes)
+		httpRequest.Params = params
+		attachData, err := e.httpClient.Reqest(httpRequest)
+		if err != nil {
+			return nil, err
+		}
+
+		response.Payload = attachData
+		return response, nil
+	}
+
+	response.Payload = []byte(attachBytes)
 	return response, nil
 }
 
@@ -382,23 +408,17 @@ func (e *Endorser) handleDeliverMessage(logger *zap.SugaredLogger, rbcMessage *c
 }
 
 func (e *Endorser) execEndorser() {
-	eNum := viper.GetInt("peer.endorser.num")
-	if eNum < 1 || eNum > 100 {
-		eNum = 10
-	}
-
-	ch := make(chan int, eNum)
 	for {
 		select {
 		case rbcMessage := <-e.endorserChan:
 			ch <- 1
-			e.EndorserProposal(rbcMessage, ch)
+			e.EndorserProposal(rbcMessage)
 		}
 	}
 }
 
 // ProcessProposal process the Proposal
-func (e *Endorser) EndorserProposal(rbcMessage *common.RBCMessage, ch chan int) {
+func (e *Endorser) EndorserProposal(rbcMessage *common.RBCMessage) {
 	defer func() {
 		if err := recover(); err != nil {
 			log.Logger.Error(err)
@@ -418,25 +438,21 @@ func (e *Endorser) EndorserProposal(rbcMessage *common.RBCMessage, ch chan int) 
 		log.Logger.Error(err)
 		return
 	}
-
 	runStateKey := rbcMessage.ChainID + ":" + hdrExt.ChaincodeId.Name
-	runStatus, _ := chaincode.EndorserChan.Load(runStateKey)
+	_, ok := chaincode.EndorserChan.Load(runStateKey)
 	//正常运行中
-	if runStatus == 1 {
-		go e.processEndorser(rbcMessage, signedProp, prop, chdr, shdr, hdrExt, ch)
+	if ok {
+		go e.processEndorser(rbcMessage, signedProp, prop, chdr, shdr, hdrExt)
 	} else {
-		e.processEndorser(rbcMessage, signedProp, prop, chdr, shdr, hdrExt, ch)
+		e.processEndorser(rbcMessage, signedProp, prop, chdr, shdr, hdrExt)
 	}
-
 }
 
 func (e *Endorser) processEndorser(rbcMessage *common.RBCMessage, signedProp *pb.SignedProposal, prop *pb.Proposal,
-	chdr *common.ChannelHeader, shdr *common.SignatureHeader, hdrExt *pb.ChaincodeHeaderExtension, ch chan int) {
+	chdr *common.ChannelHeader, shdr *common.SignatureHeader, hdrExt *pb.ChaincodeHeaderExtension) {
 
 	res, err := e.processEndorserExec(signedProp, prop, chdr, hdrExt)
-
 	<-ch
-
 	var retMessage *common.RBCMessage
 
 	if err != nil {
@@ -483,13 +499,21 @@ func (e *Endorser) processEndorser(rbcMessage *common.RBCMessage, signedProp *pb
 		}
 		retMessage = &common.RBCMessage{Type: EndorseSuccess, Data: buf, ChainID: rbcMessage.ChainID, TxID: rbcMessage.TxID}
 	}
-
-	_, err = broadcastclient.GetCommunicateOrderer().SendToOrderer(retMessage)
+	endorseSourceEndpoint := rbcMessage.Extend
+	// 若此背书交易的来源节点就是本节点，则不走grpc发送
+	if endorseSourceEndpoint == conf.V.Sealer.Raft.EndPoint {
+		if retMessage.Type == EndorseSuccess {
+			e.endorseSuccessReply(retMessage)
+		} else {
+			e.endorseFailReply(retMessage)
+		}
+		return
+	}
+	_, err = broadcastclient.GetCommunicateOrderer(endorseSourceEndpoint).SendToOrderer(retMessage)
 	if err != nil {
 		log.Logger.Error(err)
 		return
 	}
-
 }
 
 // ProcessProposal process the Proposal

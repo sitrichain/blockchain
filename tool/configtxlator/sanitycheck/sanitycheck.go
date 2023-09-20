@@ -21,7 +21,7 @@ type ElementMessage struct {
 }
 
 func Check(config *cb.Config) (*Messages, error) {
-	envConfig, err := utils.CreateSignedEnvelope(cb.HeaderType_CONFIG, "sanitycheck", nil, &cb.ConfigEnvelope{Config: config}, 0, 0)
+	envConfig, err := utils.CreateSignedEnvelope(cb.HeaderType_CONFIG, "sanitycheck", nil, &cb.ConfigEnvelope{Config: config})
 	if err != nil {
 		return nil, err
 	}

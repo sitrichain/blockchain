@@ -1,24 +1,9 @@
-/*
-Copyright IBM Corp. 2016 All Rights Reserved.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
-                 http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
-
 package comm
 
 import (
 	"bytes"
 	"fmt"
+	"github.com/rongzer/blockchain/common/conf"
 	"io/ioutil"
 	"net"
 	"net/http"
@@ -28,7 +13,6 @@ import (
 
 	"github.com/rongzer/blockchain/common/log"
 	cb "github.com/rongzer/blockchain/protos/common"
-	"github.com/spf13/viper"
 )
 
 // Client is the blockchain-ca client object
@@ -63,9 +47,9 @@ func (hc *HttpClient) Reqest(httpRequest *cb.RBCHttpRequest) ([]byte, error) {
 
 	curl := httpRequest.Endpoint
 	if !strings.HasPrefix(curl, "http") { //有http前缀，不作地址处理
-		urlStr := viper.GetString(strings.ToLower(httpRequest.Type + ".url"))
+		urlStr := conf.V.Sealer.CaAddress
 		if len(urlStr) < 1 {
-			return nil, fmt.Errorf("request %s url not config", httpRequest.Type)
+			return nil, fmt.Errorf("ca url not config")
 		}
 		if strings.HasSuffix(urlStr, "/") {
 			urlStr = urlStr[0 : len(urlStr)-1]
@@ -79,14 +63,14 @@ func (hc *HttpClient) Reqest(httpRequest *cb.RBCHttpRequest) ([]byte, error) {
 	}
 
 	//并发发送处理
-	hc.ch <- 1
+	//hc.ch <- 1
 	if httpRequest.Method == "POST" {
 		bReturn, err := hc.post(curl, httpRequest.Body, httpRequest.Headers, httpRequest.Params, 3)
-		<-hc.ch
+		//<-hc.ch
 		return bReturn, err
 	}
 	bReturn, err := hc.get(curl, httpRequest.Params)
-	<-hc.ch
+	//<-hc.ch
 	return bReturn, err
 }
 
@@ -172,6 +156,7 @@ func (hc *HttpClient) get(curl string, params map[string]string) ([]byte, error)
 		}
 	}
 
+	log.Logger.Info("get curl : ", curl)
 	resp, err := hc.httpClient.Get(curl)
 	if err != nil {
 		log.Logger.Warnf("get sync %d err:%s", len(hc.ch), err)

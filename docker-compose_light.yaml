@@ -1,0 +1,44 @@
+# COPYRIGHT Hello Corp. All Rights Reserved.
+#
+# Author: Li Zhao
+#
+version: '2'
+
+services:
+  peer0.peer.com:
+    image: rongzer/blockchain-peer:develop
+    container_name: peer0.peer.com
+    restart: always
+    environment:
+      - BLOCKCHAIN_ROLE=peer
+      - BLOCKCHAIN_LISTENADDRESS=0.0.0.0:7051
+      - BLOCKCHAIN_MSPDIR=/etc/rongzer/msp/peer/msp
+      - BLOCKCHAIN_MSPID=RBCOrgMSP
+      - BLOCKCHAIN_LOGLEVEL=INFO
+      - BLOCKCHAIN_PEER_ISLIGHT=true
+      - BLOCKCHAIN_PEER_ID=peer0.peer.com
+      - BLOCKCHAIN_PEER_ORDERERS=192.168.1.146:7050
+      - BLOCKCHAIN_PEER_ENDPOINT=192.168.1.146:7051
+      - BLOCKCHAIN_PEER_VM_IMAGETAG=:develop
+      - BLOCKCHAIN_PEER_GOSSIP_ORGLEADER=false
+      - BLOCKCHAIN_PEER_GOSSIP_BOOTSTRAP=192.168.1.145:7051
+      - BLOCKCHAIN_PEER_GOSSIP_FROMMEMBERS=www
+      - BLOCKCHAIN_PEER_CHAINCODE_JAVADOCKERFILE=rongzer/blockchain-javaenv:develop
+
+
+    working_dir: /opt/gopath/src/github.com/rongzer/blockchain/peer
+    command: peer
+    volumes:
+      - ./peers-config/peer0.peer.com/:/etc/rongzer/msp/peer:ro
+      - /var/rongzer/rbcdata-kafka/peer0:/var/rongzer/blockchain
+      - /var/run/:/var/run/
+      - /etc/localtime:/etc/localtime
+    ports:
+      - 7051:7051
+      - 7053:7053
+
+  javaenv:
+    container_name: javaenv
+    image: rongzer/blockchain-javaenv:develop
+    restart: always
+    command: java -jar libs/shim-client-1.0.jar javaenv

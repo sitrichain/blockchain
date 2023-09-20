@@ -1,41 +1,23 @@
-/*
-Copyright IBM Corp. 2016 All Rights Reserved.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
-		 http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
-
 package chaincode
 
 import (
 	"fmt"
 	"io"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/rongzer/blockchain/common/conf"
 	"github.com/rongzer/blockchain/common/log"
 	"github.com/rongzer/blockchain/peer/chaincode/platforms"
 	"github.com/rongzer/blockchain/peer/chaincode/shim"
 	"github.com/rongzer/blockchain/peer/common/ccprovider"
-	"github.com/rongzer/blockchain/peer/config"
 	"github.com/rongzer/blockchain/peer/container"
 	"github.com/rongzer/blockchain/peer/container/api"
 	"github.com/rongzer/blockchain/peer/container/ccintf"
 	"github.com/rongzer/blockchain/peer/ledger"
 	pb "github.com/rongzer/blockchain/protos/peer"
-	"github.com/spf13/viper"
 	"golang.org/x/net/context"
 )
 
@@ -118,7 +100,7 @@ func (chaincodeSupport *ChaincodeSupport) preLaunchSetup(chaincode string) chan 
 	chaincodeSupport.runningChaincodes.Lock()
 	defer chaincodeSupport.runningChaincodes.Unlock()
 
-	log.Logger.Infof("preLaunchSetup")
+	log.Logger.Debug("preLaunchSetup")
 
 	//register placeholder Handler. This will be transferred in registerHandler
 	//NOTE: from this point, existence of handler for this chaincode means the chaincode
@@ -136,25 +118,24 @@ func (chaincodeSupport *ChaincodeSupport) chaincodeHasBeenLaunched(chaincode str
 
 // NewChaincodeSupport creates a new ChaincodeSupport instance
 func NewChaincodeSupport(getCCEndpoint func() (*pb.PeerEndpoint, error), userrunsCC bool, ccstartuptimeout time.Duration) *ChaincodeSupport {
-	ccprovider.SetChaincodesPath(config.GetPath("peer.fileSystemPath") + string(filepath.Separator) + "chaincodes")
+	ccprovider.SetChaincodesPath(conf.V.FileSystemPath + string(filepath.Separator) + "chaincodes")
 
-	pnid := viper.GetString("peer.networkId")
-	pid := viper.GetString("peer.id")
+	pnid := conf.V.Peer.NetworkId
+	pid := conf.V.Peer.ID
 
 	theChaincodeSupport = &ChaincodeSupport{runningChaincodes: &runningChaincodes{chaincodeMap: make(map[string]*chaincodeRTEnv)}, peerNetworkID: pnid, peerID: pid}
 
 	//initialize global chain
-	theChaincodeSupport.peerAddress = viper.GetString("chaincode.peerAddress")
+	theChaincodeSupport.peerAddress = conf.V.Peer.Chaincode.PeerAddress
 	if len(theChaincodeSupport.peerAddress) < 1 {
 		ccEndpoint, err := getCCEndpoint()
 		if err != nil {
 			log.Logger.Errorf("Error getting chaincode endpoint, using chaincode.peerAddress: %s", err)
-			theChaincodeSupport.peerAddress = viper.GetString("chaincode.peerAddress")
+			theChaincodeSupport.peerAddress = conf.V.Peer.Chaincode.PeerAddress
 		} else {
 			theChaincodeSupport.peerAddress = ccEndpoint.Address
 		}
 		log.Logger.Infof("Chaincode support using peerAddress: %s\n", theChaincodeSupport.peerAddress)
-		//peerAddress = viper.GetString("peer.address")
 		if theChaincodeSupport.peerAddress == "" {
 			theChaincodeSupport.peerAddress = peerAddressDefault
 		}
@@ -163,34 +144,19 @@ func NewChaincodeSupport(getCCEndpoint func() (*pb.PeerEndpoint, error), userrun
 
 	theChaincodeSupport.ccStartupTimeout = ccstartuptimeout
 
-	theChaincodeSupport.peerTLS = viper.GetBool("peer.tls.enabled")
+	theChaincodeSupport.peerTLS = conf.V.TLS.Enabled
 	if theChaincodeSupport.peerTLS {
-		theChaincodeSupport.peerTLSCertFile = config.GetPath("peer.tls.cert.file")
-		theChaincodeSupport.peerTLSKeyFile = config.GetPath("peer.tls.key.file")
-		theChaincodeSupport.peerTLSSvrHostOrd = viper.GetString("peer.tls.serverhostoverride")
+		theChaincodeSupport.peerTLSCertFile = conf.V.TLS.Certificate
+		theChaincodeSupport.peerTLSKeyFile = conf.V.TLS.PrivateKey
 	}
 
-	kadef := 0
-	if ka := viper.GetString("chaincode.keepalive"); ka == "" {
-		theChaincodeSupport.keepalive = time.Duration(kadef) * time.Second
-	} else {
-		t, terr := strconv.Atoi(ka)
-		if terr != nil {
-			log.Logger.Errorf("Invalid keepalive value %s (%s) defaulting to %d", ka, terr, kadef)
-			t = kadef
-		} else if t <= 0 {
-			log.Logger.Debugf("Turn off keepalive(value %s)", ka)
-			t = kadef
-		}
-		theChaincodeSupport.keepalive = time.Duration(t) * time.Second
-	}
-
+	theChaincodeSupport.keepalive = conf.V.Peer.Chaincode.Keepalive
 	log.Logger.Infof("chaincode keep alive time : %d", theChaincodeSupport.keepalive)
 
 	//default chaincode execute timeout is 30 secs
 
 	execto := time.Duration(30) * time.Second
-	if eto := viper.GetDuration("chaincode.executetimeout"); eto <= time.Duration(1)*time.Second {
+	if eto := conf.V.Peer.Chaincode.Executetimeout; eto <= time.Duration(1)*time.Second {
 		log.Logger.Infof("eto : %d", eto)
 		log.Logger.Errorf("Invalid execute timeout value %s (should be at least 1s); defaulting to %s", eto, execto)
 	} else {
@@ -202,23 +168,11 @@ func NewChaincodeSupport(getCCEndpoint func() (*pb.PeerEndpoint, error), userrun
 	//log.Logger.Infof("execto : %d", execto)
 	theChaincodeSupport.executetimeout = execto
 
-	viper.SetEnvPrefix("CORE")
-	viper.AutomaticEnv()
-	replacer := strings.NewReplacer(".", "_")
-	viper.SetEnvKeyReplacer(replacer)
-
-	theChaincodeSupport.chaincodeLogLevel = getLogLevelFromViper("level")
-	theChaincodeSupport.shimLogLevel = getLogLevelFromViper("shim")
-	theChaincodeSupport.logFormat = viper.GetString("chaincode.logging.format")
+	theChaincodeSupport.chaincodeLogLevel = conf.V.LogLevel
+	theChaincodeSupport.shimLogLevel = conf.V.LogLevel
+	theChaincodeSupport.logFormat = "%{color}%{time:2006-01-02 15:04:05.000 MST} [%{module}] %{shortfunc} -> %{level:.4s} %{id:03x}%{color:reset} %{message}"
 
 	return theChaincodeSupport
-}
-
-// getLogLevelFromViper gets the chaincode container log levels from viper
-func getLogLevelFromViper(module string) string {
-	levelString := viper.GetString("chaincode.logging." + module)
-	log.Logger.Debugf("CORE_CHAINCODE_%s set to level %s", strings.ToUpper(module), levelString)
-	return levelString
 }
 
 // // ChaincodeStream standard stream for ChaincodeMessage type.
@@ -236,7 +190,6 @@ type ChaincodeSupport struct {
 	peerID            string
 	peerTLSCertFile   string
 	peerTLSKeyFile    string
-	peerTLSSvrHostOrd string
 	keepalive         time.Duration
 	chaincodeLogLevel string
 	shimLogLevel      string
@@ -287,7 +240,7 @@ func (chaincodeSupport *ChaincodeSupport) registerHandler(chaincodehandler *Hand
 
 	chaincodehandler.registered = true
 
-	log.Logger.Infof("chaincodehandler.registered")
+	log.Logger.Debugf("chaincodehandler.registered")
 
 	//now we are ready to receive messages and send back responses
 	chaincodehandler.txCtxs = make(map[string]*transactionContext)
@@ -393,9 +346,6 @@ func (chaincodeSupport *ChaincodeSupport) getArgsAndEnv(cccid *ccprovider.CCCont
 	// ----------------------------------------------------------------------------
 	if chaincodeSupport.peerTLS {
 		envs = append(envs, "CORE_PEER_TLS_ENABLED=true")
-		if chaincodeSupport.peerTLSSvrHostOrd != "" {
-			envs = append(envs, "CORE_PEER_TLS_SERVERHOSTOVERRIDE="+chaincodeSupport.peerTLSSvrHostOrd)
-		}
 	} else {
 		envs = append(envs, "CORE_PEER_TLS_ENABLED=false")
 	}
@@ -449,9 +399,9 @@ func (chaincodeSupport *ChaincodeSupport) launchAndWaitForRegister(ctxt context.
 		return err
 	}
 
-	log.Logger.Infof("start container: %s(networkid:%s,peerid:%s)", canName, chaincodeSupport.peerNetworkID, chaincodeSupport.peerID)
-	log.Logger.Infof("start container with args: %s", strings.Join(args, " "))
-	log.Logger.Infof("start container with env:\n\t%s", strings.Join(env, "\n\t"))
+	log.Logger.Debugf("start container: %s(networkid:%s,peerid:%s)", canName, chaincodeSupport.peerNetworkID, chaincodeSupport.peerID)
+	log.Logger.Debugf("start container with args: %s", strings.Join(args, " "))
+	log.Logger.Debugf("start container with env:\n\t%s", strings.Join(env, "\n\t"))
 
 	vmtype, _ := chaincodeSupport.getVMType(cds)
 
@@ -673,7 +623,7 @@ func (chaincodeSupport *ChaincodeSupport) Launch(context context.Context, cccid 
 		}
 	}
 
-	log.Logger.Debug("LaunchChaincode complete")
+	log.Logger.Debugf("LaunchChaincode complete")
 
 	return cID, cMsg, err
 }
@@ -746,7 +696,5 @@ func (chaincodeSupport *ChaincodeSupport) Execute(ctxt context.Context, cccid *c
 
 // IsDevMode returns true if the peer was configured with development-mode enabled
 func IsDevMode() bool {
-	mode := viper.GetString("chaincode.mode")
-
-	return mode == DevModeUserRunsChaincode
+	return conf.V.Peer.Chaincode.Mode == DevModeUserRunsChaincode
 }

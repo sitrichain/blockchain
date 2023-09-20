@@ -18,7 +18,6 @@ package policies
 
 import (
 	"fmt"
-
 	cb "github.com/rongzer/blockchain/protos/common"
 )
 
@@ -67,7 +66,8 @@ func (imp *implicitMetaPolicy) initialize(config *policyConfig) {
 func (imp *implicitMetaPolicy) Evaluate(signatureSet []*cb.SignedData) error {
 	remaining := imp.threshold
 	for _, policy := range imp.subPolicies {
-		if policy.Evaluate(signatureSet) == nil {
+		err := policy.Evaluate(signatureSet)
+		if err == nil {
 			remaining--
 			if remaining == 0 {
 				return nil

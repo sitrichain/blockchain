@@ -18,6 +18,8 @@ package mgmt
 
 import (
 	"errors"
+	"fmt"
+	"github.com/rongzer/blockchain/common/conf"
 	"reflect"
 	"sync"
 
@@ -26,7 +28,10 @@ import (
 	"github.com/rongzer/blockchain/common/config/msp/cache"
 	"github.com/rongzer/blockchain/common/log"
 	"github.com/rongzer/blockchain/common/msp"
+	pm "github.com/rongzer/blockchain/protos/msp"
 )
+
+var mspConfigList []*pm.MSPConfig
 
 // LoadLocalMsp 从指定目录载入本地MSP信息
 func LoadLocalMsp(dir string, bccspConfig *factory.FactoryOpts, mspID string) error {
@@ -34,12 +39,16 @@ func LoadLocalMsp(dir string, bccspConfig *factory.FactoryOpts, mspID string) er
 		return errors.New("The local MSP must have an ID")
 	}
 
-	conf, err := msp.GetLocalMspConfig(dir, bccspConfig, mspID)
+	config, err := msp.GetLocalMspConfig(dir, bccspConfig, mspID)
 	if err != nil {
 		return err
 	}
-
-	return GetLocalMSP().Setup(conf)
+	mspConfigList = append(mspConfigList, config)
+	if mspID == conf.V.Sealer.MSPID {
+		return GetLocalMSPOfSealer().Setup(config)
+	} else {
+		return GetLocalMSPOfPeer().Setup(config)
+	}
 }
 
 // FIXME: AS SOON AS THE CHAIN MANAGEMENT CODE IS COMPLETE,
@@ -47,10 +56,35 @@ func LoadLocalMsp(dir string, bccspConfig *factory.FactoryOpts, mspID string) er
 // OWNERSHIP OF PER-CHAIN MSP MANAGERS WILL BE HANDLED BY IT;
 // HOWEVER IN THE INTERIM, THESE HELPER FUNCTIONS ARE REQUIRED
 
-var once sync.Once
+var onceSealer sync.Once
+var oncePeer sync.Once
 var m sync.Mutex
-var localMsp msp.MSP
+var localMspPeer msp.MSP
+var localMspSealer msp.MSP
 var mspMap = make(map[string]msp.MSPManager)
+
+func generateMspList() ([]msp.MSP, error) {
+	var mspList []msp.MSP
+	for _, conf := range mspConfigList {
+		// create the msp instance
+		bccspMSP, err := msp.NewBccspMsp()
+		if err != nil {
+			return nil, fmt.Errorf("Creating MspList failed, err %s", err)
+		}
+
+		mspInst, err := cache.New(bccspMSP)
+		if err != nil {
+			return nil, fmt.Errorf("Creating MspList failed, err %s", err)
+		}
+		// set it up
+		err = mspInst.Setup(conf)
+		if err != nil {
+			return nil, fmt.Errorf("Setting up MspList failed, err %s", err)
+		}
+		mspList = append(mspList, mspInst)
+	}
+	return mspList, nil
+}
 
 // GetManagerForChain returns the msp manager for the supplied
 // chain; if no such manager exists, one is created
@@ -60,8 +94,14 @@ func GetManagerForChain(chainID string) msp.MSPManager {
 
 	mspMgr, ok := mspMap[chainID]
 	if !ok {
-		log.Logger.Infof("Created new msp manager for chain %s", chainID)
+		log.Logger.Infof("Creating new msp manager for chain %s", chainID)
 		mspMgr = msp.NewMSPManager()
+		mspList, err := generateMspList()
+		if err != nil {
+			log.Logger.Errorf("create mspList for msp manager failed, err is: %v", err)
+			return nil
+		}
+		mspMgr.Setup(mspList)
 		mspMap[chainID] = mspMgr
 	} else {
 		switch mgr := mspMgr.(type) {
@@ -112,12 +152,18 @@ func XXXSetMSPManager(chainID string, manager msp.MSPManager) {
 	mspMap[chainID] = manager
 }
 
-// GetLocalMSP 初始创建一次
-func GetLocalMSP() msp.MSP {
-	once.Do(func() {
-		localMsp = loadLocaMSP()
+func GetLocalMSPOfPeer() msp.MSP {
+	oncePeer.Do(func() {
+		localMspPeer = loadLocaMSP()
 	})
-	return localMsp
+	return localMspPeer
+}
+
+func GetLocalMSPOfSealer() msp.MSP {
+	onceSealer.Do(func() {
+		localMspSealer = loadLocaMSP()
+	})
+	return localMspSealer
 }
 
 func loadLocaMSP() msp.MSP {
@@ -137,18 +183,9 @@ func loadLocaMSP() msp.MSP {
 // GetIdentityDeserializer returns the IdentityDeserializer for the given chain
 func GetIdentityDeserializer(chainID string) msp.IdentityDeserializer {
 	if chainID == "" {
-		return GetLocalMSP()
+		return GetLocalMSPOfPeer()
 	}
 
 	return GetManagerForChain(chainID)
 }
 
-// GetLocalSigningIdentityOrPanic returns the local signing identity or panic in case
-// or error
-func GetLocalSigningIdentityOrPanic() msp.SigningIdentity {
-	id, err := GetLocalMSP().GetDefaultSigningIdentity()
-	if err != nil {
-		log.Logger.Panicf("Failed getting local signing identity [%s]", err)
-	}
-	return id
-}

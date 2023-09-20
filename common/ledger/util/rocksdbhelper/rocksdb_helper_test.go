@@ -6,17 +6,11 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
-
-	"github.com/spf13/viper"
 	"github.com/tecbot/gorocksdb"
 )
 
 // 测试对DB的基本操作：GET/PUT/DELETE/OPEN/CLOSE
 func TestDB(t *testing.T) {
-	viper.SetConfigFile("../../../../sampleconfig/core.yaml")
-	if err := viper.ReadInConfig(); err != nil {
-		t.Fatal("cannot read from configure file")
-	}
 	conf := &Conf{DBPath: "/tmp/rongzer/test/rocksdbhelper"}
 	db := CreateDB(conf)
 	err := db.Open()
@@ -40,10 +34,6 @@ func TestDB(t *testing.T) {
 }
 
 func TestDB_ReadNotExist(t *testing.T) {
-	viper.SetConfigFile("../../../../sampleconfig/core.yaml")
-	if err := viper.ReadInConfig(); err != nil {
-		t.Fatal("cannot read from configure file")
-	}
 	conf := &Conf{DBPath: "/tmp/rongzer/test/rocksdbhelper"}
 	db := CreateDB(conf)
 	err := db.Open()
@@ -58,10 +48,6 @@ func TestDB_ReadNotExist(t *testing.T) {
 
 // 测试db的批量写入
 func TestDB_WriteBatch(t *testing.T) {
-	viper.SetConfigFile("../../../../sampleconfig/core.yaml")
-	if err := viper.ReadInConfig(); err != nil {
-		t.Fatal("cannot read from configure file")
-	}
 	conf := &Conf{DBPath: "/tmp/rongzer/test/rocksdbhelper"}
 	db := CreateDB(conf)
 	err := db.Open()
@@ -83,10 +69,6 @@ func TestDB_WriteBatch(t *testing.T) {
 
 // 测试db的迭代器功能
 func TestDB_GetIterator(t *testing.T) {
-	viper.SetConfigFile("../../../../sampleconfig/core.yaml")
-	if err := viper.ReadInConfig(); err != nil {
-		t.Fatal("cannot read from configure file")
-	}
 	conf := &Conf{DBPath: "/tmp/rongzer/test/rocksdbhelper"}
 	db := CreateDB(conf)
 	err := db.Open()

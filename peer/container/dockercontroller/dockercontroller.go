@@ -1,19 +1,3 @@
-/*
-Copyright IBM Corp. 2016 All Rights Reserved.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
-		 http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
-
 package dockercontroller
 
 import (
@@ -25,19 +9,14 @@ import (
 	"strings"
 	"time"
 
-	"github.com/rongzer/blockchain/common/log"
-
 	docker "github.com/fsouza/go-dockerclient"
+	"github.com/rongzer/blockchain/common/conf"
+	"github.com/rongzer/blockchain/common/log"
 	container "github.com/rongzer/blockchain/peer/container/api"
 	"github.com/rongzer/blockchain/peer/container/ccintf"
 	cutil "github.com/rongzer/blockchain/peer/container/util"
 	pb "github.com/rongzer/blockchain/protos/peer"
-	"github.com/spf13/viper"
 	"golang.org/x/net/context"
-)
-
-var (
-	hostConfig *docker.HostConfig
 )
 
 // getClient returns an instance that implements dockerClient interface
@@ -88,66 +67,12 @@ func getDockerClient() (dockerClient, error) {
 }
 
 func getDockerHostConfig() *docker.HostConfig {
-	if hostConfig != nil {
-		return hostConfig
-	}
-	dockerKey := func(key string) string {
-		return "vm.docker.hostConfig." + key
-	}
-	getInt64 := func(key string) int64 {
-		defer func() {
-			if err := recover(); err != nil {
-				log.Logger.Warnf("load vm.docker.hostConfig.%s failed, error: %v", key, err)
-			}
-		}()
-		n := viper.GetInt(dockerKey(key))
-		return int64(n)
-	}
+	log.Logger.Debugf("docker container hostconfig NetworkMode: %s", conf.V.Peer.VM.HostConfig.NetworkMode)
 
-	var logConfig docker.LogConfig
-	err := viper.UnmarshalKey(dockerKey("LogConfig"), &logConfig)
-	if err != nil {
-		log.Logger.Warnf("load docker HostConfig.LogConfig failed, error: %s", err.Error())
-	}
-	networkMode := viper.GetString(dockerKey("NetworkMode"))
-	if networkMode == "" {
-		networkMode = "host"
-	}
-	log.Logger.Debugf("docker container hostconfig NetworkMode: %s", networkMode)
+	conf.V.Peer.VM.HostConfig.MemorySwappiness = &conf.V.Peer.VM.MemorySwappiness
+	conf.V.Peer.VM.HostConfig.OOMKillDisable = &conf.V.Peer.VM.OOMKillDisable
 
-	memorySwappiness := getInt64("MemorySwappiness")
-	oomKillDisable := viper.GetBool(dockerKey("OomKillDisable"))
-
-	hostConfig = &docker.HostConfig{
-		CapAdd:  viper.GetStringSlice(dockerKey("CapAdd")),
-		CapDrop: viper.GetStringSlice(dockerKey("CapDrop")),
-
-		DNS:         viper.GetStringSlice(dockerKey("Dns")),
-		DNSSearch:   viper.GetStringSlice(dockerKey("DnsSearch")),
-		ExtraHosts:  viper.GetStringSlice(dockerKey("ExtraHosts")),
-		NetworkMode: networkMode,
-		IpcMode:     viper.GetString(dockerKey("IpcMode")),
-		PidMode:     viper.GetString(dockerKey("PidMode")),
-		UTSMode:     viper.GetString(dockerKey("UTSMode")),
-		LogConfig:   logConfig,
-
-		ReadonlyRootfs:   viper.GetBool(dockerKey("ReadonlyRootfs")),
-		SecurityOpt:      viper.GetStringSlice(dockerKey("SecurityOpt")),
-		CgroupParent:     viper.GetString(dockerKey("CgroupParent")),
-		Memory:           getInt64("Memory"),
-		MemorySwap:       getInt64("MemorySwap"),
-		MemorySwappiness: &memorySwappiness,
-		OOMKillDisable:   &oomKillDisable,
-		CPUShares:        getInt64("CpuShares"),
-		CPUSet:           viper.GetString(dockerKey("Cpuset")),
-		CPUSetCPUs:       viper.GetString(dockerKey("CpusetCPUs")),
-		CPUSetMEMs:       viper.GetString(dockerKey("CpusetMEMs")),
-		CPUQuota:         getInt64("CpuQuota"),
-		CPUPeriod:        getInt64("CpuPeriod"),
-		BlkioWeight:      getInt64("BlkioWeight"),
-	}
-
-	return hostConfig
+	return conf.V.Peer.VM.HostConfig
 }
 
 func (vm *DockerVM) createContainer(_ context.Context, client dockerClient,
@@ -235,7 +160,7 @@ func (vm *DockerVM) Start(ctxt context.Context, ccid ccintf.CCID,
 		log.Logger.Infof("chainId : %s containnerId : %s", chainId, containerID)
 	}
 
-	attachStdout := viper.GetBool("vm.docker.attachStdout")
+	attachStdout := conf.V.Peer.VM.AttachStdout
 
 	//log.Logger.Infof("containerID : %s", containerID)
 
@@ -247,12 +172,12 @@ func (vm *DockerVM) Start(ctxt context.Context, ccid ccintf.CCID,
 	log.Logger.Infof("execute args1:%s, %s,%s, spec:%v,%v,%v,%s", imageID, containerID, strings.Join(args, ","), ccid.ChaincodeSpec, ccid.ChaincodeSpec.Type, pb.ChaincodeSpec_JAVA, ccid.ChaincodeSpec.Type == pb.ChaincodeSpec_JAVA)
 
 	if ccid.ChaincodeSpec.Type == pb.ChaincodeSpec_JAVA && len(args) > 5 && args[4] == "chaincode.jar" {
-		javaEnv := cutil.GetDockerfileFromConfig("chaincode.java.Dockerfile")
+		javaEnv := conf.V.Peer.Chaincode.JavaDockerfile
 
 		javaEnv = strings.Replace(javaEnv, "from ", "", -1)
 		javaEnv = strings.Replace(javaEnv, " ", "", -1)
 		javaEnv = strings.Replace(javaEnv, "\n", "", -1)
-		dockerHubDomain := viper.GetString("docker.hub.domain")
+		dockerHubDomain := conf.V.Peer.VM.Hub
 		if len(dockerHubDomain) < 10 {
 			dockerHubDomain = ""
 		} else {

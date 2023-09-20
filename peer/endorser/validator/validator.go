@@ -3,11 +3,11 @@ package validator
 import (
 	"errors"
 	"fmt"
-
 	"github.com/rongzer/blockchain/common/msp/mgmt"
+	"github.com/rongzer/blockchain/peer/ledger"
+
 	"github.com/rongzer/blockchain/common/policies"
 	"github.com/rongzer/blockchain/peer/chain"
-	"github.com/rongzer/blockchain/peer/common/validation"
 	"github.com/rongzer/blockchain/peer/policy"
 	"github.com/rongzer/blockchain/peer/scc"
 	"github.com/rongzer/blockchain/protos/common"
@@ -22,7 +22,7 @@ func NewValidator() *Validator {
 	v := new(Validator)
 	v.policyChecker = policy.NewPolicyChecker(
 		chain.NewChannelPolicyManagerGetter(),
-		mgmt.GetLocalMSP(),
+		mgmt.GetLocalMSPOfPeer(),
 		mgmt.NewLocalMSPPrincipalGetter(),
 	)
 
@@ -36,7 +36,7 @@ func (v *Validator) checkACL(signedProp *peer.SignedProposal, chdr *common.Chann
 func (v *Validator) ValidateEndorserProposal(signedProp *peer.SignedProposal) (*peer.Proposal, *common.ChannelHeader, *common.SignatureHeader, *peer.ChaincodeHeaderExtension, error) {
 
 	// at first, we check whether the message is valid
-	prop, chdr, shdr, hdrExt, err := validation.ValidateProposalMessage(signedProp)
+	prop, chdr, shdr, hdrExt, err := ValidateProposalMessage(signedProp)
 	if err != nil {
 		return nil, nil, nil, nil, err
 	}
@@ -55,16 +55,18 @@ func (v *Validator) ValidateEndorserProposal(signedProp *peer.SignedProposal) (*
 	txid := chdr.TxId
 	if txid == "" {
 		err = errors.New("Invalid txID. It must be different from the empty string.")
+		return nil, nil, nil, nil, err
 	}
 
 	if chainID != "" {
 		// here we handle uniqueness check and ACLs for proposals targeting a chain
-		lgr := chain.GetLedger(chainID)
+		var lgr ledger.PeerLedger
+		lgr = chain.GetLedger(chainID)
 		if lgr == nil {
-			return nil, nil, nil, nil, err
+			return nil, nil, nil, nil, fmt.Errorf("cannot get ledger for this chainId: %v", chainID)
 		}
 		if _, err := lgr.GetTransactionByID(txid); err == nil {
-			return nil, nil, nil, nil, err
+			return nil, nil, nil, nil, fmt.Errorf("this tx already exists in ledger of this chainId: %v", chainID)
 		}
 
 		// check ACL only for application chaincodes; ACLs

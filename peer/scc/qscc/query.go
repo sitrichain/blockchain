@@ -24,12 +24,11 @@ import (
 	jsoniter "github.com/json-iterator/go"
 	"github.com/rongzer/blockchain/common/log"
 	"github.com/rongzer/blockchain/common/msp/mgmt"
-	"github.com/rongzer/blockchain/peer/broadcastclient"
 	"github.com/rongzer/blockchain/peer/chain"
 	"github.com/rongzer/blockchain/peer/chaincode/shim"
+	"github.com/rongzer/blockchain/peer/dispatcher"
 	"github.com/rongzer/blockchain/peer/ledger"
 	"github.com/rongzer/blockchain/peer/policy"
-	"github.com/rongzer/blockchain/protos/common"
 	pb "github.com/rongzer/blockchain/protos/peer"
 	"github.com/rongzer/blockchain/protos/utils"
 )
@@ -56,18 +55,19 @@ const (
 	GetBlockByHash     string = "GetBlockByHash"
 	GetTransactionByID string = "GetTransactionByID"
 	GetBlockByTxID     string = "GetBlockByTxID"
+	GetAttachById      string = "GetAttachById"
 )
 
 // Init is called once per chain when the chain is created.
 // This allows the chaincode to initialize any variables on the ledger prior
 // to any transaction execution on the chain.
 func (e *LedgerQuerier) Init(_ shim.ChaincodeStubInterface) pb.Response {
-	log.Logger.Info("Init QSCC")
+	log.Logger.Debug("Init QSCC")
 
 	// Init policy checker for access control
 	e.policyChecker = policy.NewPolicyChecker(
 		chain.NewChannelPolicyManagerGetter(),
-		mgmt.GetLocalMSP(),
+		mgmt.GetLocalMSPOfPeer(),
 		mgmt.NewLocalMSPPrincipalGetter(),
 	)
 
@@ -93,26 +93,19 @@ func (e *LedgerQuerier) Invoke(stub shim.ChaincodeStubInterface) pb.Response {
 	//log.Logger.Infof("fname : %s cid : %s", fname, cid)
 
 	if fname == "GetPeerList" {
-		rbcMessage := &common.RBCMessage{ChainID: cid, Type: 12}
-		res, err := broadcastclient.GetCommunicateOrderer().SendToOrderer(rbcMessage)
+		buf, err := dispatcher.GetRaftDistributor().MarshalPeerList(cid)
 		if err != nil {
-			shim.Error(fmt.Sprintf("get peer list error: %s", err))
-		}
-
-		if res == nil {
+			log.Logger.Errorf("Rejecting getPeerList message because %s", err)
 			return shim.Error("get peer List error")
 		}
-
-		log.Logger.Debugf("GetPeerList %v", res)
-
-		return shim.Success(res.Data)
+		return shim.Success(buf)
 	}
 
 	if fname != GetChainInfo && len(args) < 3 {
 		return shim.Error(fmt.Sprintf("missing 3rd argument for %s", fname))
 	}
-
-	targetLedger := chain.GetLedger(cid)
+	var targetLedger ledger.PeerLedger
+	targetLedger = chain.GetLedger(cid)
 	if targetLedger == nil {
 		return shim.Error(fmt.Sprintf("Invalid chain ID, %s", cid))
 	}
@@ -148,6 +141,8 @@ func (e *LedgerQuerier) Invoke(stub shim.ChaincodeStubInterface) pb.Response {
 		return getChainInfo(targetLedger, cid)
 	case GetBlockByTxID:
 		return getBlockByTxID(targetLedger, args[2], cid)
+	case GetAttachById:
+		return getAttachById(targetLedger, string(args[2]))
 	case "GetBlockStatistics":
 		blockIndex, err := strconv.ParseInt(string(args[2]), 10, 64)
 		if err != nil {
@@ -260,13 +255,8 @@ func getTransactionByID(vledger ledger.PeerLedger, tid []byte, _ string) pb.Resp
 	}
 
 	tidStr := strings.TrimSpace(string(tid))
-	//log.Logger.Infof("tidStr : %s", tidStr)
 	processedTran, err := vledger.GetTransactionByID(tidStr)
 	if err != nil {
-		//processedTran, err = getTransactionByIDFromOrderer(cid, string(tid))
-		//if err != nil {
-		//	return shim.Error(fmt.Sprintf("Failed to get proccess from orderer %d, error %s", processedTran, err))
-		//}
 		return shim.Error(fmt.Sprintf("Failed to get proccess from orderer %v, error %s", processedTran, err))
 	}
 
@@ -274,8 +264,6 @@ func getTransactionByID(vledger ledger.PeerLedger, tid []byte, _ string) pb.Resp
 	if err != nil {
 		return shim.Error(err.Error())
 	}
-
-	//log.Logger.Infof("processedTranbuf : %s", string(bytes))
 
 	return shim.Success(bytes)
 }
@@ -290,15 +278,8 @@ func getBlockByNumber(vledger ledger.PeerLedger, number []byte, chanId string) p
 	}
 	block, err := vledger.GetBlockByNumber(bnum)
 	if err != nil {
-		block, err = getBlockByNumFromOrderer(chanId, string(number))
-		if err != nil {
-			return shim.Error(fmt.Sprintf("Failed to get block number from orderer %d, error %s", bnum, err))
-		}
+		return shim.Error(fmt.Sprintf("Failed to get block by number: %v, error: %v", bnum, err))
 	}
-	// TODO: consider trim block content before returning
-	//  Specifically, trim transaction 'data' out of the transaction array Payloads
-	//  This will preserve the transaction Payload header,
-	//  and client can do GetTransactionByID() if they want the full transaction details
 
 	bytes, err := utils.Marshal(block)
 	if err != nil {
@@ -314,15 +295,8 @@ func getBlockByHash(vledger ledger.PeerLedger, hash []byte, cid string) pb.Respo
 	}
 	block, err := vledger.GetBlockByHash(hash)
 	if err != nil {
-		block, err = getBlockByHashFromOrder(hash, cid)
-		if err != nil {
-			return shim.Error(fmt.Sprintf("Failed to get block hash from orderer %s, error %s", string(hash), err))
-		}
+		return shim.Error(fmt.Sprintf("Failed to get block by hash: %v, error: %v", string(hash), err))
 	}
-	// TODO: consider trim block content before returning
-	//  Specifically, trim transaction 'data' out of the transaction array Payloads
-	//  This will preserve the transaction Payload header,
-	//  and client can do GetTransactionByID() if they want the full transaction details
 
 	bytes, err := utils.Marshal(block)
 	if err != nil {
@@ -335,10 +309,7 @@ func getBlockByHash(vledger ledger.PeerLedger, hash []byte, cid string) pb.Respo
 func getChainInfo(vledger ledger.PeerLedger, cid string) pb.Response {
 	binfo, err := vledger.GetBlockchainInfo()
 	if err != nil {
-		binfo, err = getChainInfoFromOrderer(cid)
-		if err != nil {
-			return shim.Error(fmt.Sprintf("Failed to get chain info from orderer %s, error %s", binfo, err))
-		}
+		return shim.Error(fmt.Sprintf("Failed to get chain info, error %s", err))
 	}
 	bytes, err := utils.Marshal(binfo)
 	if err != nil {
@@ -353,11 +324,6 @@ func getBlockByTxID(vledger ledger.PeerLedger, rawTxID []byte, cid string) pb.Re
 	block, err := vledger.GetBlockByTxID(txID)
 
 	if err != nil {
-		block, err = getBlockByTxIDFromOrderer(rawTxID, cid)
-		if err != nil {
-			return shim.Error(fmt.Sprintf("Failed to get block hash from orderer %s, error %s", string(rawTxID), err))
-		}
-
 		return shim.Error(fmt.Sprintf("Failed to get block for txID %s, error %s", txID, err))
 	}
 
@@ -370,63 +336,15 @@ func getBlockByTxID(vledger ledger.PeerLedger, rawTxID []byte, cid string) pb.Re
 	return shim.Success(bytes)
 }
 
-func getBlockByHashFromOrder(hash []byte, cid string) (*common.Block, error) {
-	br, err := broadcastclient.GetCommunicateOrderer().SendToOrderer(&common.RBCMessage{Type: 22, ChainID: cid, Data: hash, Extend: "2"})
+func getAttachById(vledger ledger.PeerLedger, key string) pb.Response {
+	attach, err := vledger.GetAttachById(key)
 	if err != nil {
-		return nil, err
+		return shim.Error(err.Error())
 	}
 
-	block := &common.Block{}
-	if err = block.Unmarshal(br.Data); err != nil {
-		return nil, err
-	}
+	log.Logger.Info("qscc key: ", key, " attach :", attach)
 
-	return block, nil
-}
-
-func getBlockByNumFromOrderer(cid, num string) (*common.Block, error) {
-
-	br, err := broadcastclient.GetCommunicateOrderer().SendToOrderer(&common.RBCMessage{Type: 22, ChainID: cid, Data: []byte(num), Extend: "1"})
-	if err != nil {
-		return nil, err
-	}
-
-	block := &common.Block{}
-	if err = block.Unmarshal(br.Data); err != nil {
-		return nil, err
-	}
-
-	return block, nil
-}
-
-func getChainInfoFromOrderer(cid string) (*common.BlockchainInfo, error) {
-
-	br, err := broadcastclient.GetCommunicateOrderer().SendToOrderer(&common.RBCMessage{Type: 22, ChainID: cid, Extend: "0"})
-	if err != nil {
-		return nil, err
-	}
-
-	bi := &common.BlockchainInfo{}
-	if err := bi.Unmarshal(br.Data); err != nil {
-		return nil, err
-	}
-
-	return bi, nil
-}
-
-func getBlockByTxIDFromOrderer(txid []byte, cid string) (*common.Block, error) {
-	br, err := broadcastclient.GetCommunicateOrderer().SendToOrderer(&common.RBCMessage{Type: 22, ChainID: cid, Data: txid, Extend: "3"})
-	if err != nil {
-		return nil, err
-	}
-	block := &common.Block{}
-
-	if err := block.Unmarshal(br.Data); err != nil {
-		return nil, err
-	}
-
-	return block, nil
-
+	return shim.Success([]byte(attach))
 }
 
 // 获取错误交易链表

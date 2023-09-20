@@ -103,7 +103,7 @@ func SendProducerBlockEvent(block *common.Block) error {
 		bevent.Data.Data = append(bevent.Data.Data, ebytes)
 	}
 
-	log.Logger.Infof("Channel [%s]: Sending event for block number [%d]", channelId, block.Header.Number)
+	log.Logger.Debugf("Channel [%s]: Sending event for block number [%d]", channelId, block.Header.Number)
 
 	return Send(CreateBlockEvent(bevent))
 }
@@ -125,4 +125,8 @@ func CreateRejectionEvent(chainId string, txId string, errorMsg string) *pb.Even
 
 func CreateSuccessEvent(chainId string, txId string) *pb.Event {
 	return &pb.Event{Event: &pb.Event_Success{Success: &pb.Success{ChainId: chainId, TxId: txId}}}
+}
+
+func CreateHeartbeatEvent() *pb.Event {
+	return &pb.Event{Event: &pb.Event_Heartbeat{Heartbeat: &pb.Heartbeat{}}}
 }

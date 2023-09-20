@@ -20,6 +20,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	putil "github.com/rongzer/blockchain/protos/utils"
 	"strconv"
 
 	"github.com/gogo/protobuf/proto"
@@ -30,7 +31,6 @@ import (
 	ledgerUtil "github.com/rongzer/blockchain/peer/ledger/util"
 	"github.com/rongzer/blockchain/protos/common"
 	"github.com/rongzer/blockchain/protos/peer"
-	putil "github.com/rongzer/blockchain/protos/utils"
 )
 
 const (
@@ -197,16 +197,19 @@ func (index *blockIndex) indexBlock(blockIdxInfo *blockIdxInfo) error {
 	}
 
 	//索引attach
-	if blockIdxInfo.block != nil && blockIdxInfo.block.Data != nil && blockIdxInfo.block.Data.Data != nil {
-		for _, d := range blockIdxInfo.block.Data.Data {
-			if env, err := putil.GetEnvelopeFromBlock(d); err == nil && env.Attachs != nil {
-				txPayload, err := putil.GetPayload(env)
-				if err == nil {
-					chdr, err := putil.UnmarshalChannelHeader(txPayload.Header.ChannelHeader)
+	if _, ok := index.indexItemsMap[blkstorage.IndexableAttrAttachID]; ok {
+		if blockIdxInfo.block != nil && blockIdxInfo.block.Data != nil && blockIdxInfo.block.Data.Data != nil {
+			for _, d := range blockIdxInfo.block.Data.Data {
+				if env, err := putil.GetEnvelopeFromBlock(d); err == nil && env.Attachs != nil {
+					txPayload, err := putil.GetPayload(env)
 					if err == nil {
-						//遍历附件
-						for k := range env.Attachs {
-							batch.Put(constructAttachKey(k), []byte(chdr.TxId))
+						chdr, err := putil.UnmarshalChannelHeader(txPayload.Header.ChannelHeader)
+						if err == nil {
+							//遍历附件
+							for k := range env.Attachs {
+								batch.Put(constructAttachKey(k), []byte(chdr.TxId))
+								log.Logger.Info("IndexableAttrAttachID key: ", string(constructAttachKey(k)), " txid: ", chdr.TxId)
+							}
 						}
 					}
 				}
@@ -237,7 +240,9 @@ func (index *blockIndex) indexBlock(blockIdxInfo *blockIdxInfo) error {
 	// Index6 - Store transaction validation result by transaction id
 	if _, ok := index.indexItemsMap[blkstorage.IndexableAttrTxValidationCode]; ok {
 		for idx, txoffset := range txOffsets {
-			batch.Put(constructTxValidationCodeIDKey(txoffset.txID), []byte{byte(txsfltr.Flag(idx))})
+			if len(txsfltr) != 0 {
+				batch.Put(constructTxValidationCodeIDKey(txoffset.txID), []byte{byte(txsfltr.Flag(idx))})
+			}
 		}
 	}
 

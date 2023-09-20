@@ -23,7 +23,8 @@ var _ = math.Inf
 const _ = proto.GoGoProtoPackageIsVersion3 // please upgrade the proto package
 
 type ConsensusType struct {
-	Type string `protobuf:"bytes,1,opt,name=type,proto3" json:"type,omitempty"`
+	Type     string `protobuf:"bytes,1,opt,name=type,proto3" json:"type,omitempty"`
+	Metadata []byte `protobuf:"bytes,2,opt,name=metadata,proto3" json:"metadata,omitempty"`
 }
 
 func (m *ConsensusType) Reset()         { *m = ConsensusType{} }
@@ -64,6 +65,13 @@ func (m *ConsensusType) GetType() string {
 		return m.Type
 	}
 	return ""
+}
+
+func (m *ConsensusType) GetMetadata() []byte {
+	if m != nil {
+		return m.Metadata
+	}
+	return nil
 }
 
 type BatchSize struct {

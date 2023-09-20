@@ -42,7 +42,7 @@ func NewLocalMSPPrincipalGetter() MSPPrincipalGetter {
 type localMSPPrincipalGetter struct{}
 
 func (m *localMSPPrincipalGetter) Get(role string) (*msp.MSPPrincipal, error) {
-	mspid, err := GetLocalMSP().GetIdentifier()
+	mspid, err := GetLocalMSPOfPeer().GetIdentifier()
 	if err != nil {
 		return nil, fmt.Errorf("Could not extract local msp identifier [%s]", err)
 	}

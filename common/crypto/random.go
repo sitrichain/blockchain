@@ -2,6 +2,7 @@ package crypto
 
 import (
 	"math/rand"
+	"sync"
 	"time"
 )
 
@@ -14,14 +15,19 @@ const (
 )
 
 var src = rand.NewSource(time.Now().UnixNano())
+var sp = sync.Pool{
+	New: func() interface{} {
+		return src.Int63()
+	},
+}
 
 // GetRandomBytes returns len random looking bytes
 func GetRandomBytes(n int) ([]byte, error) {
 	b := make([]byte, n)
 	// A src.Int63() generates 63 random bits, enough for letterIdxMax characters!
-	for i, cache, remain := n-1, src.Int63(), letterIdxMax; i >= 0; {
+	for i, cache, remain := n-1, sp.Get().(int64), letterIdxMax; i >= 0; {
 		if remain == 0 {
-			cache, remain = src.Int63(), letterIdxMax
+			cache, remain = sp.Get().(int64), letterIdxMax
 		}
 		if idx := int(cache & letterIdxMask); idx < len(letterBytes) {
 			b[i] = letterBytes[idx]

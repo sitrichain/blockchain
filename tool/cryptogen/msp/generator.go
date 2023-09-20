@@ -13,7 +13,7 @@ import (
 	"github.com/rongzer/blockchain/tool/cryptogen/csp"
 )
 
-func GenerateLocalMSP(baseDir, name string, _ []string, signCA *ca.CA, _ *ca.CA) error {
+func GenerateLocalMSP(baseDir, name string, sans []string, signCA *ca.CA, tlsCA *ca.CA) error {
 
 	// create folder structure
 	mspDir := filepath.Join(baseDir, "msp")
@@ -60,13 +60,13 @@ func GenerateLocalMSP(baseDir, name string, _ []string, signCA *ca.CA, _ *ca.CA)
 	if err != nil {
 		return err
 	}
-	/*
-		// the TLS CA certificate goes into tlscacerts
-		err = x509Export(filepath.Join(mspDir, "tlscacerts", x509Filename(tlsCA.Name)), tlsCA.SignCert)
-		if err != nil {
-			return err
-		}
-	*/
+
+	// the TLS CA certificate goes into tlscacerts
+	err = x509Export(filepath.Join(mspDir, "tlscacerts", x509Filename(tlsCA.Name)), tlsCA.SignCert)
+	if err != nil {
+		return err
+	}
+
 	// the signing identity goes into admincerts.
 	// This means that the signing identity
 	// of this MSP is also an admin of this MSP
@@ -82,42 +82,39 @@ func GenerateLocalMSP(baseDir, name string, _ []string, signCA *ca.CA, _ *ca.CA)
 	/*
 		Generate the TLS artifacts in the TLS folder
 	*/
-	/*
-		// generate private key
-		tlsPrivKey, _, err := csp.GeneratePrivateKey(tlsDir)
-		if err != nil {
-			return err
-		}
-		// get public key
-		tlsPubKey, err := csp.GetECPublicKey(tlsPrivKey)
-		if err != nil {
-			return err
-		}
+	// generate private key
+	tlsPrivKey, _, err := csp.GeneratePrivateKey(tlsDir)
+	if err != nil {
+		return err
+	}
+	// get public key
+	tlsPubKey, err := csp.GetECPublicKey(tlsPrivKey)
+	if err != nil {
+		return err
+	}
+	// generate X509 certificate using TLS CA
+	_, err = tlsCA.SignCertificate(filepath.Join(tlsDir),
+		name, sans, tlsPubKey, gm.KeyUsageDigitalSignature|gm.KeyUsageKeyEncipherment,
+		[]gm.ExtKeyUsage{gm.ExtKeyUsageServerAuth, gm.ExtKeyUsageClientAuth})
+	if err != nil {
+		return err
+	}
+	err = x509Export(filepath.Join(tlsDir, "ca.crt"), tlsCA.SignCert)
+	if err != nil {
+		return err
+	}
 
-			// generate X509 certificate using TLS CA
-			_, err = tlsCA.SignCertificate(filepath.Join(tlsDir),
-				name, sans, tlsPubKey, gm.KeyUsageDigitalSignature|gm.KeyUsageKeyEncipherment,
-				[]gm.ExtKeyUsage{gm.ExtKeyUsageServerAuth, gm.ExtKeyUsageClientAuth})
-			if err != nil {
-				return err
-			}
-			err = x509Export(filepath.Join(tlsDir, "ca.crt"), tlsCA.SignCert)
-			if err != nil {
-				return err
-			}
+	// rename the generated TLS X509 cert
+	err = os.Rename(filepath.Join(tlsDir, x509Filename(name)),
+		filepath.Join(tlsDir, "server.crt"))
+	if err != nil {
+		return err
+	}
 
-			// rename the generated TLS X509 cert
-			err = os.Rename(filepath.Join(tlsDir, x509Filename(name)),
-				filepath.Join(tlsDir, "server.crt"))
-			if err != nil {
-				return err
-			}
-
-			err = keyExport(tlsDir, filepath.Join(tlsDir, "server.key"), tlsPrivKey)
-			if err != nil {
-				return err
-			}
-	*/
+	err = keyExport(tlsDir, filepath.Join(tlsDir, "server.key"), tlsPrivKey)
+	if err != nil {
+		return err
+	}
 	return nil
 }
 

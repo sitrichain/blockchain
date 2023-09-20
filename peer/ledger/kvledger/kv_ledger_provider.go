@@ -1,19 +1,3 @@
-/*
-Copyright IBM Corp. 2016 All Rights Reserved.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
-		 http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
-
 package kvledger
 
 import (
@@ -21,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/rongzer/blockchain/common/conf"
 	"github.com/rongzer/blockchain/common/ledger/blkstorage"
 	"github.com/rongzer/blockchain/common/ledger/blkstorage/fsblkstorage"
 	"github.com/rongzer/blockchain/common/ledger/util"
@@ -35,7 +20,6 @@ import (
 	"github.com/rongzer/blockchain/peer/ledger/ledgerconfig"
 	"github.com/rongzer/blockchain/protos/common"
 	"github.com/rongzer/blockchain/protos/utils"
-	"github.com/spf13/viper"
 	"github.com/syndtr/goleveldb/leveldb"
 	gr "github.com/tecbot/gorocksdb"
 )
@@ -65,10 +49,9 @@ func NewProvider() (ledger.PeerLedgerProvider, error) {
 	log.Logger.Info("Initializing ledger provider")
 
 	// Initialize the ID store (inventory of chainIds/ledgerIds)
-	dbtype := viper.GetString("ledger.state.stateDatabase")
 	var idStore *idStore
 	var provider *Provider
-	if dbtype == "rocksdb" {
+	if conf.V.Ledger.StateDatabase == "rocksdb" {
 		idStore = openIDStoreRocksDb(ledgerconfig.GetLedgerProviderPath())
 	} else {
 		idStore = openIDStoreLevelDb(ledgerconfig.GetLedgerProviderPath())
@@ -82,6 +65,7 @@ func NewProvider() (ledger.PeerLedgerProvider, error) {
 		blkstorage.IndexableAttrBlockNumTranNum,
 		blkstorage.IndexableAttrBlockTxID,
 		blkstorage.IndexableAttrTxValidationCode,
+		blkstorage.IndexableAttrAttachID,
 	}
 	indexConfig := &blkstorage.IndexConfig{AttrsToIndex: attrsToIndex}
 	blockStoreProvider := fsblkstorage.NewProvider(
@@ -135,7 +119,56 @@ func (provider *Provider) Create(genesisBlock *common.Block) (ledger.PeerLedger,
 		ldger.Close()
 		return nil, err
 	}
-	panicOnErr(provider.idStore.createLedgerID(ledgerID, genesisBlock), "Error while marking ledger as created")
+	panicOnErr(provider.idStore.createLedgerID(ledgerID), "Error while marking ledger as created")
+	return ldger, nil
+}
+
+func (provider *Provider) CreateWithoutCommit(genesisBlock *common.Block) (ledger.PeerLedger, error) {
+	ledgerID, err := utils.GetChainIDFromBlock(genesisBlock)
+	if err != nil {
+		return nil, err
+	}
+	exists, err := provider.idStore.ledgerIDExists(ledgerID)
+	if err != nil {
+		return nil, err
+	}
+	if exists {
+		return nil, ErrLedgerIDExists
+	}
+	if err = provider.idStore.setUnderConstructionFlag(ledgerID); err != nil {
+		return nil, err
+	}
+	ldger, err := provider.openInternal(ledgerID)
+	if err != nil {
+		log.Logger.Errorf("Error in opening a new empty ledger. Unsetting under construction flag. Err: %s", err)
+		provider.idStore.unsetUnderConstructionFlag()
+		return nil, err
+	}
+	if err = provider.idStore.createLedgerID(ledgerID); err != nil {
+		return nil, errors.New("Error while marking ledger as created")
+	}
+	return ldger, nil
+}
+
+func (provider *Provider) CreateWithChainID(chainId string) (ledger.PeerLedger, error) {
+	ldger, err := provider.openInternal(chainId)
+	if err != nil {
+		log.Logger.Errorf("Error in opening a new empty ledger. Err: %s", err)
+		return nil, err
+	}
+	exists, err := provider.idStore.ledgerIDExists(chainId)
+	if err != nil {
+		return nil, err
+	}
+	if exists {
+		return ldger, nil
+	}
+	if err = provider.idStore.setUnderConstructionFlag(chainId); err != nil {
+		return nil, err
+	}
+	if err = provider.idStore.createLedgerID(chainId); err != nil {
+		return nil, errors.New("Error while marking ledger as created")
+	}
 	return ldger, nil
 }
 
@@ -172,7 +205,7 @@ func (provider *Provider) openInternal(ledgerID string) (ledger.PeerLedger, erro
 		return nil, err
 	}
 
-	// Create a kvLedger for this chain/ledger, which encasulates the underlying data stores
+	// Create a KvLedger for this chain/ledger, which encasulates the underlying data stores
 	// (id store, blockstore, state database, history database)
 	l, err := newKVLedger(ledgerID, blockStore, vDB, historyDB)
 	if err != nil {
@@ -225,9 +258,8 @@ func (provider *Provider) recoverUnderConstructionLedger() {
 		panicOnErr(provider.idStore.unsetUnderConstructionFlag(), "Error while unsetting under construction flag")
 	case 1:
 		log.Logger.Infof("Genesis block was committed. Hence, marking the peer ledger as created")
-		genesisBlock, err := ldger.GetBlockByNumber(0)
 		panicOnErr(err, "Error while retrieving genesis block from blockchain for ledger [%s]", ledgerID)
-		panicOnErr(provider.idStore.createLedgerID(ledgerID, genesisBlock), "Error while adding ledgerID [%s] to created list", ledgerID)
+		panicOnErr(provider.idStore.createLedgerID(ledgerID), "Error while adding ledgerID [%s] to created list", ledgerID)
 	default:
 		panic(fmt.Errorf(
 			"Data inconsistency: under construction flag is set for ledger [%s] while the height of the blockchain is [%d]",
@@ -294,22 +326,18 @@ func (s *idStore) getUnderConstructionFlag() (string, error) {
 	return string(val), nil
 }
 
-func (s *idStore) createLedgerID(ledgerID string, gb *common.Block) error {
+func (s *idStore) createLedgerID(ledgerID string) error {
 	key := s.encodeLedgerKey(ledgerID)
-	var val []byte
+	var val = []byte("1")
 	var err error
-	if val, err = gb.Marshal(); err != nil {
-		return err
-	}
 	if val, err = s.db.Get(key); err != nil {
 		return err
 	}
 	if val != nil {
 		return ErrLedgerIDExists
 	}
-	dbtype := viper.GetString("ledger.state.stateDatabase")
 	var batch util.DbUpdateBatch
-	if dbtype == "rocksdb" {
+	if conf.V.Ledger.StateDatabase == "rocksdb" {
 		batch = gr.NewWriteBatch()
 	} else {
 		batch = &leveldb.Batch{}
@@ -333,10 +361,15 @@ func (s *idStore) getAllLedgerIds() ([]string, error) {
 	var ids []string
 	itr := s.db.GetIterator(nil, nil)
 	for itr.SeekToFirst(); itr.Valid(); itr.Next() {
-		if bytes.Equal(itr.Key(), underConstructionLedgerKey) {
+		key := itr.Key()
+
+		if key == nil {
 			continue
 		}
-		id := s.decodeLedgerID(itr.Key())
+		if bytes.Equal(key, underConstructionLedgerKey) {
+			continue
+		}
+		id := s.decodeLedgerID(key)
 		ids = append(ids, id)
 	}
 

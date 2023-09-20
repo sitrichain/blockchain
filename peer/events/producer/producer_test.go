@@ -1,46 +1,30 @@
-/*
-Copyright IBM Corp. 2017 All Rights Reserved.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
-		 http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
-
 package producer
 
 import (
 	"fmt"
-	"github.com/rongzer/blockchain/common/msp"
-	"github.com/rongzer/blockchain/common/msp/mgmt"
-	"github.com/rongzer/blockchain/common/testhelper"
-	mmsp "github.com/rongzer/blockchain/common/testhelper"
-	"github.com/rongzer/blockchain/common/util"
-	"github.com/rongzer/blockchain/peer/config"
-	"github.com/rongzer/blockchain/peer/events/consumer"
-	"github.com/rongzer/blockchain/protos/peer"
-	ehpb "github.com/rongzer/blockchain/protos/peer"
-	"github.com/rongzer/blockchain/protos/utils"
-	"github.com/spf13/viper"
-	"github.com/stretchr/testify/assert"
-	"golang.org/x/net/context"
-	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials"
-	"google.golang.org/grpc/grpclog"
-	"google.golang.org/grpc/metadata"
 	"math/rand"
 	"net"
 	"os"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/rongzer/blockchain/common/conf"
+	"github.com/rongzer/blockchain/common/msp"
+	"github.com/rongzer/blockchain/common/msp/mgmt"
+	"github.com/rongzer/blockchain/common/testhelper"
+	mmsp "github.com/rongzer/blockchain/common/testhelper"
+	"github.com/rongzer/blockchain/common/util"
+	"github.com/rongzer/blockchain/peer/events/consumer"
+	"github.com/rongzer/blockchain/protos/peer"
+	ehpb "github.com/rongzer/blockchain/protos/peer"
+	"github.com/rongzer/blockchain/protos/utils"
+	"github.com/stretchr/testify/assert"
+	"golang.org/x/net/context"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/grpclog"
+	"google.golang.org/grpc/metadata"
 )
 
 type Adapter struct {
@@ -336,8 +320,8 @@ func TestUnregister(t *testing.T) {
 func TestNewEventsServer(t *testing.T) {
 	doubleCreation := func() {
 		NewEventsServer(
-			uint(viper.GetInt("peer.events.buffersize")),
-			viper.GetDuration("peer.events.timeout"))
+			uint(conf.V.Peer.Events.BufferSize),
+			conf.V.Peer.Events.Timeout)
 	}
 	assert.Panics(t, doubleCreation)
 
@@ -418,7 +402,7 @@ func TestMain(m *testing.M) {
 		return
 	}
 
-	signer, err := mgmt.GetLocalMSP().GetDefaultSigningIdentity()
+	signer, err := mgmt.GetLocalMSPOfPeer().GetDefaultSigningIdentity()
 	if err != nil {
 		fmt.Println("Could not get signer")
 		os.Exit(-1)
@@ -433,8 +417,8 @@ func TestMain(m *testing.M) {
 	}
 	//coreutil.SetupTestConfig()
 	var opts []grpc.ServerOption
-	if viper.GetBool("peer.tls.enabled") {
-		creds, err := credentials.NewServerTLSFromFile(config.GetPath("peer.tls.cert.file"), config.GetPath("peer.tls.key.file"))
+	if conf.V.TLS.Enabled {
+		creds, err := credentials.NewServerTLSFromFile(conf.V.TLS.Certificate, conf.V.TLS.PrivateKey)
 		if err != nil {
 			grpclog.Fatalf("Failed to generate credentials %v", err)
 		}
@@ -454,12 +438,12 @@ func TestMain(m *testing.M) {
 
 	// Register EventHub server
 	// use a buffer of 100 and blocking timeout
-	viper.Set("peer.events.buffersize", 100)
-	viper.Set("peer.events.timeout", 0)
+	conf.V.Peer.Events.BufferSize = 100
+	conf.V.Peer.Events.Timeout = 0
 
 	ehServer = NewEventsServer(
-		uint(viper.GetInt("peer.events.buffersize")),
-		viper.GetDuration("peer.events.timeout"))
+		uint(conf.V.Peer.Events.BufferSize),
+		conf.V.Peer.Events.Timeout)
 	ehpb.RegisterEventsServer(grpcServer, ehServer)
 
 	go grpcServer.Serve(lis)
@@ -469,7 +453,7 @@ func TestMain(m *testing.M) {
 	adapter = &Adapter{notfy: done}
 	obcEHClient, _ = consumer.NewEventsClient(peerAddress, regTimeout, adapter)
 	if err = obcEHClient.Start(); err != nil {
-		fmt.Printf("could not start chat %s\n", err)
+		fmt.Printf("could not startSendEndorserEvent chat %s\n", err)
 		obcEHClient.Stop()
 		return
 	}

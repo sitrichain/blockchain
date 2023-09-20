@@ -2,10 +2,11 @@ package leveldbhelper
 
 import (
 	"bytes"
-	"github.com/syndtr/goleveldb/leveldb"
 	"os"
 	"strconv"
 	"testing"
+
+	"github.com/syndtr/goleveldb/leveldb"
 )
 
 // 测试对DB的基本操作：GET/PUT/DELETE/OPEN/CLOSE
@@ -65,8 +66,11 @@ func TestDB_GetIterator(t *testing.T) {
 		db.Close()
 		os.RemoveAll("/tmp/rongzer/test/leveldbhelper")
 	}()
-	startKey := bytes.Join([][]byte{[]byte("leveldb"), []byte("1")}, dbNameKeySep)
-	iter := db.GetIterator(startKey, nil)
+
+	_ = db.Put(nil, []byte("test_value"), true)
+	_ = db.Put([]byte("test_key"), []byte("test_value"), true)
+
+	iter := db.GetIterator(nil, nil)
 	for iter.SeekToFirst(); iter.Valid(); iter.Next() {
 		t.Logf("this key is %s", iter.Key())
 		t.Logf("this value is %s", iter.Value())

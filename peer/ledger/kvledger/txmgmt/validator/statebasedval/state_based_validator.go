@@ -1,23 +1,6 @@
-/*
-Copyright IBM Corp. 2016 All Rights Reserved.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
-		 http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
-
 package statebasedval
 
 import (
-	"fmt"
 	"sort"
 	"strconv"
 	"strings"
@@ -28,7 +11,6 @@ import (
 	"github.com/rongzer/blockchain/peer/ledger/kvledger/txmgmt/statedb"
 	"github.com/rongzer/blockchain/peer/ledger/kvledger/txmgmt/version"
 	"github.com/rongzer/blockchain/peer/ledger/util"
-	"github.com/rongzer/blockchain/peer/scc/rbccustomer"
 	"github.com/rongzer/blockchain/protos/common"
 	"github.com/rongzer/blockchain/protos/ledger/rwset/kvrwset"
 	"github.com/rongzer/blockchain/protos/peer"
@@ -79,126 +61,35 @@ func (v *Validator) ValidateEndorserTX(envBytes []byte, doMVCCValidation bool, u
 
 // ValidateAndPrepareBatch implements method in Validator interface
 func (v *Validator) ValidateAndPrepareBatch(block *common.Block, doMVCCValidation bool) (*statedb.UpdateBatch, error) {
-
 	log.Logger.Debugf("New block arrived for validation:%#v, doMVCCValidation=%t", block, doMVCCValidation)
 	readNum, writeNum := v.db.GetReadWriteNum()
 
 	updates := statedb.NewUpdateBatch()
 	log.Logger.Debugf("Validating a block with [%d] transactions", len(block.Data.Data))
 
-	// Committer validator has already set validation flags based on well formed tran checks
 	txsFilter := util.TxValidationFlags(block.Metadata.Metadata[common.BlockMetadataIndex_TRANSACTIONS_FILTER])
-
-	// Precaution in case committer validator has not added validation flags yet
 	if len(txsFilter) == 0 {
 		txsFilter = util.NewTxValidationFlags(len(block.Data.Data))
-		block.Metadata.Metadata[common.BlockMetadataIndex_TRANSACTIONS_FILTER] = txsFilter
 	}
-
-	//valiResCodes := make([]*common.ValidateResultCode, 0)
-	//if len(block.Metadata.Metadata) > 10 {
-	//	md, err := putils.GetMetadataFromBlock(block, common.BlockMetadataIndex_TRANSACTIONS_ERRORESEN)
-	//	if err != nil {
-	//		log.Logger.Errorf("GetMetadataFromBlock err : %s", err)
-	//		//return nil, err
-	//	}
-	//	txErrDataBytes := md.Value
-	//	err = json.Unmarshal(txErrDataBytes, &valiResCodes)
-	//	if err != nil {
-	//		log.Logger.Errorf("unmarsal txErrDataBytes err : %s", err)
-	//	}
-	//}
-
-	ch := make(chan int, len(block.Data.Data))
-
 	var counter = struct {
 		sync.RWMutex // gard m
-		m            map[int]*rwsetutil.TxRwSet
+		m map[int]*rwsetutil.TxRwSet
 	}{m: make(map[int]*rwsetutil.TxRwSet, 100)}
-	//mapTxRWSet := make(map[int]*rwsetutil.TxRwSet)
-
+	// 多协程并行验证交易
+	var wg sync.WaitGroup
 	for txIndex, envBytes := range block.Data.Data {
+		wg.Add(1)
 		go func(txIndex int, envBytes []byte) {
+			defer wg.Done()
 			if txsFilter.IsInvalid(txIndex) {
-				// Skiping invalid transaction
-				log.Logger.Warnf("Block [%d] Transaction index [%d] marked as invalid by committer. Reason code [%d]",
-					block.Header.Number, txIndex, txsFilter.Flag(txIndex))
-				ch <- 0
 				return
 			}
-
-			env, err := putils.GetEnvelopeFromBlock(envBytes)
-			if err != nil {
-				ch <- -1
-				return
-			}
-
-			payload, err := putils.GetPayload(env)
-			if err != nil {
-				ch <- -1
-				return
-			}
-
-			chdr, err := putils.UnmarshalChannelHeader(payload.Header.ChannelHeader)
-			if err != nil {
-				ch <- -1
-				return
-			}
-
-			//解释交易
-			ccs := &peer.ChaincodeSpec{}
-			err = ccs.Unmarshal(chdr.Extension)
-
-			if err == nil && ccs.ChaincodeId != nil {
-
-				if ccs.ChaincodeId.Name == "rbccustomer" {
-					rbccustomer.ClearCache()
-				}
-
-				if ccs.ChaincodeId.Name == "rbcmodel" {
-					tx, err := putils.GetTransaction(payload.Data)
-					if tx != nil {
-						chaincodeActionPayload, _ := putils.GetChaincodeActionPayload(tx.Actions[0].Payload)
-						if chaincodeActionPayload != nil {
-							chaincodeProposalPayload, _ := putils.GetChaincodeProposalPayload(chaincodeActionPayload.ChaincodeProposalPayload)
-							if chaincodeProposalPayload != nil {
-								chaincodeInvocationSpec := &peer.ChaincodeInvocationSpec{}
-								err = chaincodeInvocationSpec.Unmarshal(chaincodeProposalPayload.Input)
-
-								if err == nil && chaincodeInvocationSpec.ChaincodeSpec != nil && chaincodeInvocationSpec.ChaincodeSpec.Input != nil {
-									args := chaincodeInvocationSpec.ChaincodeSpec.Input.Args
-
-									if args != nil && len(args) > 1 {
-										if string(args[1]) == "setModel" || string(args[1]) == "setTable" ||
-											string(args[1]) == "deleteModel" || string(args[1]) == "deleteTable" {
-											//rbcmodel.ClearCache()
-										}
-									}
-								}
-							}
-						}
-					}
-				}
-			}
-
-			txType := common.HeaderType(chdr.Type)
-
-			if txType != common.HeaderType_ENDORSER_TRANSACTION {
-				log.Logger.Debugf("Skipping mvcc validation for Block [%d] Transaction index [%d] because, the transaction type is [%s]",
-					block.Header.Number, txIndex, txType)
-				ch <- 0
-				return
-			}
-
+			// mvcc验证
 			txRWSet, txResult, err := v.ValidateEndorserTX(envBytes, doMVCCValidation, updates)
-
 			if err != nil {
-				ch <- -1
+				txsFilter.SetFlag(txIndex, txResult)
 				return
 			}
-
-			txsFilter.SetFlag(txIndex, txResult)
-
 			//txRWSet != nil => t is valid
 			if txRWSet != nil {
 				counter.Lock()
@@ -206,40 +97,15 @@ func (v *Validator) ValidateAndPrepareBatch(block *common.Block, doMVCCValidatio
 				counter.Unlock()
 				txsFilter.SetFlag(txIndex, peer.TxValidationCode_VALID)
 			}
-			if txsFilter.IsValid(txIndex) {
-				log.Logger.Debugf("Block [%d] Transaction index [%d] TxId [%s] marked as valid by state validator",
-					block.Header.Number, txIndex, chdr.TxId)
-			} else {
-				log.Logger.Warnf("Block [%d] Transaction index [%d] TxId [%s] marked as invalid by state validator. Reason code [%d]",
-					block.Header.Number, txIndex, chdr.TxId, txsFilter.Flag(txIndex))
-
-			}
-
-			ch <- 0
-
 		}(txIndex, envBytes)
-
 	}
-
-	//等待并行处理结束
-	for i := 0; i < len(block.Data.Data); i++ {
-		out := <-ch
-		if out == -1 {
-			return nil, fmt.Errorf("parse block has exception")
-		}
-	}
+	wg.Wait()
 
 	for txIndex := range block.Data.Data {
 		txRWSet := counter.m[txIndex]
 		if txRWSet == nil {
 			continue
 		}
-
-		//valiCode, err := v.validateKVReadWriteIsError(txRWSet, updates)
-		//if valiCode != nil && err == nil {
-		//	valiResCodes = append(valiResCodes, valiCode)
-		//}
-
 		if txResult, err := v.validateCalTx(txRWSet, updates); err != nil {
 			return nil, err
 		} else if txResult != peer.TxValidationCode_VALID {
@@ -262,21 +128,9 @@ func (v *Validator) ValidateAndPrepareBatch(block *common.Block, doMVCCValidatio
 	if writeNum1 >= writeNum {
 		writeNum1 = writeNum1 - writeNum
 	}
-	log.Logger.Infof("Validating [%d] block with [%d] transactions with %d updates,%d calupdat,%d read", block.GetHeader().Number, len(block.Data.Data), updates.UpdateNum, updates.CalNum, readNum1)
-	//验证结束后，将
+	log.Logger.Debugf("Validating [%d] block with [%d] transactions with %d updates,%d calupdat,%d read", block.GetHeader().Number, len(block.Data.Data), updates.UpdateNum, updates.CalNum, readNum1)
+	//验证结束后，将txsFilter写入block的元数据BlockMetadataIndex_TRANSACTIONS_FILTER对应的位置
 	block.Metadata.Metadata[common.BlockMetadataIndex_TRANSACTIONS_FILTER] = txsFilter
-
-	//if len(valiResCodes) > 0 {
-	//	valiResCodesBytes, err := json.Marshal(valiResCodes)
-	//	if err != nil {
-	//		log.Logger.Errorf("json.Marshal(valiResCodes) err : %s", err)
-	//	}
-	//
-	//	valiMarshalBytes := putils.MarshalOrPanic(&common.Metadata{Value: valiResCodesBytes})
-	//	block.Metadata.Metadata = append(block.Metadata.Metadata, valiMarshalBytes)
-	//	log.Logger.Infof("BlockMetadataIndex_TRANSACTIONS_ERRORESEN : %s",
-	//		string(block.Metadata.Metadata[common.BlockMetadataIndex_TRANSACTIONS_ERRORESEN]))
-	//}
 
 	return updates, nil
 }
@@ -545,9 +399,6 @@ func (v *Validator) validateReadSet(ns string, kvReads []*kvrwset.KVRead, update
 // i.e., it checks whether a key/version combination is already updated in the statedb (by an already committed block)
 // or in the updates (by a preceding valid transaction in the current block)
 func (v *Validator) validateKVRead(ns string, kvRead *kvrwset.KVRead, _ *statedb.UpdateBatch) (bool, error) {
-	//if updates.Exists(ns, kvRead.Key) {
-	//return false, nil
-	//}
 	key := kvRead.Key
 	if strings.HasPrefix(key, "__RBCMODEL_") { //兼容老的数据模型
 		key = "__RBC_MODEL_" + key[11:]
@@ -555,6 +406,7 @@ func (v *Validator) validateKVRead(ns string, kvRead *kvrwset.KVRead, _ *statedb
 
 	versionedValue, err := v.db.GetState(ns, key)
 	if err != nil {
+		log.Logger.Warnf("Validate KV read error because get key [%s:%s] from state error. %s", ns, key, err)
 		return false, nil
 	}
 	var committedVersion *version.Height
@@ -564,11 +416,8 @@ func (v *Validator) validateKVRead(ns string, kvRead *kvrwset.KVRead, _ *statedb
 
 	newversion := rwsetutil.NewVersion(kvRead.Version)
 	if !version.AreSame(committedVersion, newversion) {
-		log.Logger.Debugf("Version mismatch for key [%s:%s]. Committed version = [%s], Version in readSet [%s]",
+		log.Logger.Warnf("Validate KV read error because version mismatch for key [%s:%s]. Committed version = [%s], Version in readSet [%s]",
 			ns, key, committedVersion, kvRead.Version)
-
-		//validateCode := &common.ValidateResultCode{committedVersion, newversion, nil}
-
 		return false, nil
 	}
 	return true, nil
@@ -587,7 +436,7 @@ func (v *Validator) validateKVReadWriteIsError(txRWSet *rwsetutil.TxRwSet, updat
 			if err != nil {
 				return nil, err
 			}
-			var committedVersion *version.Height
+			committedVersion := &version.Height{}
 			if versionedValue != nil {
 				committedVersion = versionedValue.Version
 			}
@@ -664,6 +513,8 @@ func (v *Validator) validateRangeQuery(ns string, rangeQueryInfo *kvrwset.RangeQ
 		log.Logger.Debug(`Hashing results are not present in the range query info hence, initiating raw KVReads based validation`)
 		validator = &rangeQueryResultsValidator{}
 	}
-	validator.init(rangeQueryInfo, combinedItr)
+	if err := validator.init(rangeQueryInfo, combinedItr); err != nil {
+		return false, err
+	}
 	return validator.validate()
 }

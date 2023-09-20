@@ -553,7 +553,7 @@ func (mgr *blockfileMgr) fetchBlock(lp *fileLocPointer) (*common.Block, error) {
 		return nil, err
 	}
 	//Attachs不参与Hash
-	mgr.clearAttach(block)
+	//mgr.clearAttach(block)
 
 	return block, nil
 }

@@ -1,19 +1,3 @@
-/*
-Copyright IBM Corp. 2016 All Rights Reserved.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
-		 http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
-
 package util
 
 import (
@@ -21,19 +5,18 @@ import (
 	"strings"
 
 	docker "github.com/fsouza/go-dockerclient"
+	"github.com/rongzer/blockchain/common/conf"
 	"github.com/rongzer/blockchain/common/metadata"
-	"github.com/rongzer/blockchain/peer/config"
-	"github.com/spf13/viper"
 )
 
 //NewDockerClient creates a docker client
 func NewDockerClient() (client *docker.Client, err error) {
-	endpoint := viper.GetString("vm.endpoint")
-	tlsenabled := viper.GetBool("vm.docker.tls.enabled")
+	endpoint := conf.V.Peer.VM.Endpoint
+	tlsenabled := conf.V.Peer.VM.TLS.Enabled
 	if tlsenabled {
-		cert := config.GetPath("vm.docker.tls.cert.file")
-		key := config.GetPath("vm.docker.tls.key.file")
-		ca := config.GetPath("vm.docker.tls.ca.file")
+		cert := conf.V.Peer.VM.TLS.Certificate
+		key := conf.V.Peer.VM.TLS.PrivateKey
+		ca := conf.V.Peer.VM.TLS.RootCAs[0]
 		client, err = docker.NewTLSClient(endpoint, cert, key, ca)
 	} else {
 		client, err = docker.NewClient(endpoint)
@@ -69,5 +52,5 @@ func ParseDockerfileTemplate(template string) string {
 }
 
 func GetDockerfileFromConfig(path string) string {
-	return ParseDockerfileTemplate(viper.GetString(path))
+	return ParseDockerfileTemplate(path)
 }

@@ -195,7 +195,7 @@ func (hl *genericHandlerList) foreach(_ *pb.Event, action func(h *handler)) {
 }
 
 //eventProcessor has a map of event type to handlers interested in that
-//event type. start() kicks of the event processor where it waits for Events
+//event type. startSendEndorserEvent() kicks of the event processor where it waits for Events
 //from producers. We could easily generalize the one event handling loop to one
 //per handlerMap if necessary.
 //
@@ -204,8 +204,8 @@ type eventProcessor struct {
 	eventConsumers map[pb.EventType]handlerList
 
 	//we could generalize this with mutiple channels each with its own size
-	eventChannel chan *pb.Event
-
+	endorserEventChannel chan *pb.Event
+	blockEventChannel    chan *pb.Event
 	//timeout duration for producer to send an event.
 	//if < 0, if buffer full, unblocks immediately and not send
 	//if 0, if buffer full, will block and guarantee the event will be sent out
@@ -217,15 +217,63 @@ type eventProcessor struct {
 //send events simply over a reentrant static method
 var gEventProcessor *eventProcessor
 
-func (ep *eventProcessor) start() {
+func (ep *eventProcessor) startSendEndorserEvent() {
+	log.Logger.Debug("Event processor started")
+	for {
+		//wait for event
+		e := <-ep.endorserEventChannel
+
+		var hl handlerList
+		eType := getMessageType(e)
+		ep.RLock()
+		if hl = ep.eventConsumers[eType]; hl == nil {
+			log.Logger.Errorf("Event of type %v does not support", e.Event)
+			ep.RUnlock()
+			continue
+		}
+		ep.RUnlock()
+		hl.foreach(e, func(h *handler) {
+			if e.Event != nil {
+				h.SendMessage(e)
+			}
+		})
+	}
+}
+
+func (ep *eventProcessor) startSendBlockEvent() {
 	log.Logger.Info("Event processor started")
 	for {
 		//wait for event
-		e := <-ep.eventChannel
+		e := <-ep.blockEventChannel
+
+		var hl handlerList
+		eType := getMessageType(e)
+		ep.RLock()
+		if hl = ep.eventConsumers[eType]; hl == nil {
+			log.Logger.Errorf("Event of type %v does not support", e.Event)
+			ep.RUnlock()
+			continue
+		}
+		ep.RUnlock()
+		hl.foreach(e, func(h *handler) {
+			if e.Event != nil {
+				h.SendMessage(e)
+			}
+		})
+	}
+}
+
+func (ep *eventProcessor) heartbeat() {
+	log.Logger.Debug("Heartbeat Event processor started")
+	for {
+		//wait for event
+		time.Sleep(3 * time.Second)
+		e := CreateHeartbeatEvent()
 
 		var hl handlerList
 		eType := getMessageType(e)
 		ep.Lock()
+
 		if hl, _ = ep.eventConsumers[eType]; hl == nil {
 			log.Logger.Errorf("Event of type %v does not support", e.Event)
 			ep.Unlock()
@@ -236,7 +284,7 @@ func (ep *eventProcessor) start() {
 
 		hl.foreach(e, func(h *handler) {
 			if e.Event != nil {
-				//SendMessage(e)
+				log.Logger.Debug("############################## Heartbeat Event send")
 				h.SendMessage(e)
 			}
 		})
@@ -244,18 +292,20 @@ func (ep *eventProcessor) start() {
 	}
 }
 
-//initialize and start
+//initialize and startSendEndorserEvent
 func initializeEvents(bufferSize uint, tout time.Duration) {
 	if gEventProcessor != nil {
 		panic("should not be called twice")
 	}
 
-	gEventProcessor = &eventProcessor{eventConsumers: make(map[pb.EventType]handlerList), eventChannel: make(chan *pb.Event, bufferSize), timeout: tout}
+	gEventProcessor = &eventProcessor{eventConsumers: make(map[pb.EventType]handlerList), endorserEventChannel: make(chan *pb.Event, bufferSize), blockEventChannel: make(chan *pb.Event, bufferSize), timeout: tout}
 
 	addInternalEventTypes()
 
-	//start the event processor
-	go gEventProcessor.start()
+	//startSendEndorserEvent the event processor
+	go gEventProcessor.startSendEndorserEvent()
+	go gEventProcessor.startSendBlockEvent()
+	go gEventProcessor.heartbeat()
 }
 
 //AddEventType supported event
@@ -276,7 +326,7 @@ func AddEventType(eventType pb.EventType) error {
 		gEventProcessor.eventConsumers[eventType] = &genericHandlerList{handlers: make(map[*handler]bool)}
 	case pb.EventType_SUCCESS:
 		gEventProcessor.eventConsumers[eventType] = &genericHandlerList{handlers: make(map[*handler]bool)}
-	case pb.EventType_MVCCTX:
+	case pb.EventType_HEARTBEAT:
 		gEventProcessor.eventConsumers[eventType] = &genericHandlerList{handlers: make(map[*handler]bool)}
 	}
 	gEventProcessor.Unlock()
@@ -326,25 +376,21 @@ func Send(e *pb.Event) error {
 		log.Logger.Debugf("Event processor is nil")
 		return nil
 	}
-
-	if gEventProcessor.timeout < 0 {
-		log.Logger.Debugf("Event processor timeout < 0")
+	// 若是blockEvent则塞入blockEventChannel,若是其他类型的Event（背书成功/失败等）则塞入eventChannel
+	if e.GetBlock() != nil {
 		select {
-		case gEventProcessor.eventChannel <- e:
-		default:
-			return fmt.Errorf("could not send the blocking event")
-		}
-	} else if gEventProcessor.timeout == 0 {
-		log.Logger.Debugf("Event processor timeout = 0")
-		gEventProcessor.eventChannel <- e
-	} else {
-		log.Logger.Debugf("Event processor timeout > 0")
-		select {
-		case gEventProcessor.eventChannel <- e:
+		case gEventProcessor.blockEventChannel <- e:
 		case <-time.After(gEventProcessor.timeout):
-			return fmt.Errorf("could not send the blocking event")
+			return fmt.Errorf("could not send the block event")
+		}
+	} else {
+		select {
+		case gEventProcessor.endorserEventChannel <- e:
+		case <-time.After(gEventProcessor.timeout):
+			return fmt.Errorf("could not send the endorser event")
 		}
 	}
+
 	log.Logger.Debugf("Event sent successfully")
 	return nil
 }

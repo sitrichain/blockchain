@@ -73,8 +73,8 @@ func GetEnvelopeFromBlock(data []byte) (*common.Envelope, error) {
 }
 
 // CreateSignedEnvelope creates a signed envelope of the desired type, with marshaled dataMsg and signs it
-func CreateSignedEnvelope(txType common.HeaderType, channelID string, signer crypto.LocalSigner, dataMsg proto.Message, msgVersion int32, epoch uint64) (*common.Envelope, error) {
-	payloadChannelHeader := MakeChannelHeader(txType, msgVersion, channelID, epoch)
+func CreateSignedEnvelope(txType common.HeaderType, channelID string, signer crypto.LocalSigner, dataMsg proto.Message) (*common.Envelope, error) {
+	payloadChannelHeader := MakeChannelHeader(txType, channelID)
 
 	var err error
 	payloadSignatureHeader := &common.SignatureHeader{}

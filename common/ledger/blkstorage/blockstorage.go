@@ -19,6 +19,7 @@ const (
 	IndexableAttrBlockNumTranNum  = IndexableAttr("BlockNumTranNum")
 	IndexableAttrBlockTxID        = IndexableAttr("BlockTxID")
 	IndexableAttrTxValidationCode = IndexableAttr("TxValidationCode")
+	IndexableAttrAttachID		  = IndexableAttr("AttachId")
 )
 
 // IndexConfig - a configuration that includes a list of attributes that should be indexed

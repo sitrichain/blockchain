@@ -36,7 +36,7 @@ func NewSigner() crypto.LocalSigner {
 
 // NewSignatureHeader creates a SignatureHeader with the correct signing identity and a valid nonce
 func (s *mspSigner) NewSignatureHeader() (*cb.SignatureHeader, error) {
-	signer, err := mspmgmt.GetLocalMSP().GetDefaultSigningIdentity()
+	signer, err := mspmgmt.GetLocalMSPOfSealer().GetDefaultSigningIdentity()
 	if err != nil {
 		return nil, fmt.Errorf("Failed getting MSP-based signer [%s]", err)
 	}
@@ -60,7 +60,7 @@ func (s *mspSigner) NewSignatureHeader() (*cb.SignatureHeader, error) {
 
 // Sign a message which should embed a signature header created by NewSignatureHeader
 func (s *mspSigner) Sign(message []byte) ([]byte, error) {
-	signer, err := mspmgmt.GetLocalMSP().GetDefaultSigningIdentity()
+	signer, err := mspmgmt.GetLocalMSPOfSealer().GetDefaultSigningIdentity()
 	if err != nil {
 		return nil, fmt.Errorf("Failed getting MSP-based signer [%s]", err)
 	}

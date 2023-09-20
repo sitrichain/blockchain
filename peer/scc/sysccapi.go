@@ -1,33 +1,18 @@
-/*
-Copyright IBM Corp. 2016 All Rights Reserved.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
-		 http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
-
 package scc
 
 import (
 	"fmt"
+	"github.com/rongzer/blockchain/peer/chain"
+	"github.com/rongzer/blockchain/peer/ledger"
 	"strings"
 
+	"github.com/rongzer/blockchain/common/conf"
 	"github.com/rongzer/blockchain/common/log"
 	"github.com/rongzer/blockchain/common/util"
-	"github.com/rongzer/blockchain/peer/chain"
 	"github.com/rongzer/blockchain/peer/chaincode/shim"
 	"github.com/rongzer/blockchain/peer/common/ccprovider"
 	"github.com/rongzer/blockchain/peer/container/inproccontroller"
 	pb "github.com/rongzer/blockchain/protos/peer"
-	"github.com/spf13/viper"
 	"golang.org/x/net/context"
 )
 
@@ -80,7 +65,7 @@ func RegisterSysCC(syscc *SystemChaincode) error {
 		}
 	}
 
-	log.Logger.Infof("system chaincode %s(%s) registered", syscc.Name, syscc.Path)
+	log.Logger.Debugf("system chaincode %s(%s) registered", syscc.Name, syscc.Path)
 	return err
 }
 
@@ -97,9 +82,11 @@ func deploySysCC(chainID string, syscc *SystemChaincode) error {
 
 	ctxt := context.Background()
 	if chainID != "" {
-		lgr := chain.GetLedger(chainID)
+		// 如果是raft共识模式下，不能从peer/chain包的chains全局变量中获取lgr，因为raft共识模式下，peer模块不再创建链和账本（orderer模块已经创建过了）
+		var lgr ledger.PeerLedger
+		lgr = chain.GetLedger(chainID)
 		if lgr == nil {
-			panic(fmt.Sprintf("syschain %s start up failure - unexpected nil ledger for channel %s", syscc.Name, chainID))
+			panic(fmt.Sprintf("syschaincode %s start up failure - unexpected nil ledger for channel %s", syscc.Name, chainID))
 		}
 
 		_, err := ccprov.GetContext(lgr)
@@ -129,11 +116,10 @@ func deploySysCC(chainID string, syscc *SystemChaincode) error {
 
 	_, _, err = ccprov.ExecuteWithErrorFilter(ctxt, cccid, chaincodeDeploymentSpec)
 
-	log.Logger.Infof("system chaincode %s/%s(%s) deployed", syscc.Name, chainID, syscc.Path)
+	log.Logger.Infof("system chaincode %s of %s deployed", syscc.Name, chainID)
 
 	return err
 }
-
 
 // buildLocal builds a given chaincode code
 func buildSysCC(_ context.Context, spec *pb.ChaincodeSpec) (*pb.ChaincodeDeploymentSpec, error) {
@@ -143,13 +129,16 @@ func buildSysCC(_ context.Context, spec *pb.ChaincodeSpec) (*pb.ChaincodeDeploym
 }
 
 func isWhitelisted(syscc *SystemChaincode) bool {
-	chaincodes := viper.GetStringMapString("chaincode.system")
 	// 增加系统chaincode的白名单
 	if strings.HasPrefix(syscc.Name, "rbc") || syscc.Name == "simple" {
 		return true
 	}
 
-	val, ok := chaincodes[syscc.Name]
-	enabled := val == "enable" || val == "true" || val == "yes"
-	return ok && enabled
+	for i := range conf.V.Peer.Chaincode.WhiteList {
+		if syscc.Name == conf.V.Peer.Chaincode.WhiteList[i] {
+			return true
+		}
+	}
+
+	return false
 }

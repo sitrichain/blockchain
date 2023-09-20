@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/rongzer/blockchain/common/conf"
 	"github.com/rongzer/blockchain/common/ledger/blkstorage/fsblkstorage"
 	"github.com/rongzer/blockchain/common/testhelper"
 	"github.com/rongzer/blockchain/peer/ledger"
@@ -13,16 +14,13 @@ import (
 	"github.com/rongzer/blockchain/protos/common"
 	"github.com/rongzer/blockchain/protos/ledger/queryresult"
 	putils "github.com/rongzer/blockchain/protos/utils"
-	"github.com/spf13/viper"
 )
 
 // 测试Provider的各个方法
 func TestLedgerProvider(t *testing.T) {
-	// 读取core.yaml配置文件
-	testhelper.SetupCoreYAMLConfig()
 	// 创建测试环境
 	testPath := "/tmp/rongzer/test/kvledger5"
-	viper.Set("peer.fileSystemPath", testPath)
+	conf.V.FileSystemPath = testPath
 	defer func() {
 		os.RemoveAll(testPath)
 	}()
@@ -67,10 +65,8 @@ func TestLedgerProvider(t *testing.T) {
 
 // 测试idStore崩溃后能否正常恢复
 func TestIdStoreRecovery_beforeFail(t *testing.T) {
-	// 读取core.yaml配置文件
-	testhelper.SetupCoreYAMLConfig()
 	// 创建测试环境
-	viper.Set("peer.fileSystemPath", "/tmp/rongzer/test/kvledger6")
+	conf.V.FileSystemPath = "/tmp/rongzer/test/kvledger6"
 	provider, _ := NewProvider()
 	defer provider.Close()
 	// now create the genesis block
@@ -84,9 +80,8 @@ func TestIdStoreRecovery_beforeFail(t *testing.T) {
 }
 
 func TestIdStoreRecovery_AfterFail(t *testing.T) {
-	testhelper.SetupCoreYAMLConfig()
 	// 创建测试环境
-	viper.Set("peer.fileSystemPath", "/tmp/rongzer/test/kvledger6")
+	conf.V.FileSystemPath = "/tmp/rongzer/test/kvledger6"
 	defer func() {
 		os.RemoveAll("/tmp/rongzer/test/kvledger6")
 	}()
@@ -104,10 +99,8 @@ func TestIdStoreRecovery_AfterFail(t *testing.T) {
 }
 
 func TestMultipleLedgerBasicRead(t *testing.T) {
-	// 读取core.yaml配置文件
-	testhelper.SetupCoreYAMLConfig()
 	// 创建测试环境
-	viper.Set("peer.fileSystemPath", "/tmp/rongzer/test/kvledger7")
+	conf.V.FileSystemPath = "/tmp/rongzer/test/kvledger7"
 	numLedgers := 10
 	provider, _ := NewProvider()
 	defer provider.Close()
@@ -131,9 +124,8 @@ func TestMultipleLedgerBasicRead(t *testing.T) {
 }
 
 func TestMultipleLedgerBasicWrite(t *testing.T) {
-	testhelper.SetupCoreYAMLConfig()
 	// 创建测试环境
-	viper.Set("peer.fileSystemPath", "/tmp/rongzer/test/kvledger7")
+	conf.V.FileSystemPath = "/tmp/rongzer/test/kvledger7"
 	defer func() {
 		os.RemoveAll("/tmp/rongzer/test/kvledger7")
 	}()
@@ -158,14 +150,13 @@ func TestMultipleLedgerBasicWrite(t *testing.T) {
 }
 
 func TestLedgerBackup(t *testing.T) {
-	testhelper.SetupCoreYAMLConfig()
 	ledgerid := "TestLedger"
 	originalPath := "/tmp/rongzer/test/kvledgerOld"
 	restorePath := "/tmp/rongzer/test/kvledgerNew"
-	viper.Set("ledger.history.enableHistoryDatabase", true)
+	conf.V.Ledger.EnableHistoryDatabase = true
 
 	// create and populate a ledger in the original environment
-	viper.Set("peer.fileSystemPath", originalPath)
+	conf.V.FileSystemPath = originalPath
 	defer func() {
 		os.RemoveAll(originalPath)
 		os.RemoveAll(restorePath)
@@ -197,7 +188,7 @@ func TestLedgerBackup(t *testing.T) {
 	provider.Close()
 
 	// Create restore environment
-	viper.Set("peer.fileSystemPath", restorePath)
+	conf.V.FileSystemPath = restorePath
 
 	// remove the statedb, historydb, and block indexes (they are supposed to be auto created during opening of an existing ledger)
 	// and rename the originalPath to restorePath

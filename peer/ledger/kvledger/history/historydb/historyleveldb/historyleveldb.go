@@ -1,22 +1,7 @@
-/*
-Copyright IBM Corp. 2016 All Rights Reserved.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
-		 http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
-
 package historyleveldb
 
 import (
+	"github.com/rongzer/blockchain/common/conf"
 	"github.com/rongzer/blockchain/common/ledger/blkstorage"
 	comutils "github.com/rongzer/blockchain/common/ledger/util"
 	"github.com/rongzer/blockchain/common/ledger/util/leveldbhelper"
@@ -30,7 +15,6 @@ import (
 	"github.com/rongzer/blockchain/peer/ledger/util"
 	"github.com/rongzer/blockchain/protos/common"
 	putils "github.com/rongzer/blockchain/protos/utils"
-	"github.com/spf13/viper"
 )
 
 var savePointKey = []byte{0x00}
@@ -44,8 +28,7 @@ type HistoryDBProvider struct {
 func NewHistoryDBProvider() *HistoryDBProvider {
 	var dbPath string
 	var dbProvider comutils.Provider
-	dbtype := viper.GetString("ledger.state.stateDatabase")
-	if dbtype == "rocksdb" {
+	if conf.V.Ledger.StateDatabase == "rocksdb" {
 		dbPath = ledgerconfig.GetHistoryRocksDBPath()
 		dbProvider = rocksdbhelper.NewProvider(&rocksdbhelper.Conf{DBPath: dbPath})
 	} else {

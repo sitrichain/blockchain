@@ -46,3 +46,17 @@ func UnmarshalConfigEnvelope(data []byte) (*cb.ConfigEnvelope, error) {
 	}
 	return configEnv, nil
 }
+
+// UnmarshalConfigUpdateFromPayload unmarshals configuration update from given payload
+func UnmarshalConfigUpdateFromPayload(payload *cb.Payload) (*cb.ConfigUpdate, error) {
+	configEnv, err := UnmarshalConfigEnvelope(payload.Data)
+	if err != nil {
+		return nil, err
+	}
+	configUpdateEnv, err := envelopeToConfigUpdate(configEnv.LastUpdate)
+	if err != nil {
+		return nil, err
+	}
+
+	return UnmarshalConfigUpdate(configUpdateEnv.ConfigUpdate)
+}

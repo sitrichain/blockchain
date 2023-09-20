@@ -1,15 +1,13 @@
-/*
-Copyright IBM Corp. All Rights Reserved.
-
-SPDX-License-Identifier: Apache-2.0
-*/
-
 package comm
 
 import (
+	"github.com/rongzer/blockchain/common/log"
+	"io/ioutil"
+	"strings"
+	"sync"
 	"time"
 
-	"github.com/spf13/viper"
+	"github.com/rongzer/blockchain/common/conf"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/keepalive"
 )
@@ -30,6 +28,8 @@ var (
 		ServerTimeout:     time.Duration(20) * time.Second, // 20 sec - gRPC default
 		ServerMinInterval: time.Duration(1) * time.Minute,  // match ClientInterval
 	}
+	mappingOfIpAndHost sync.Map // map[string]string{}
+	onceConf           sync.Once
 )
 
 // KeepAliveOptions is used to set the gRPC keepalive settings for both
@@ -52,10 +52,54 @@ type KeepaliveOptions struct {
 	ServerMinInterval time.Duration
 }
 
+func InitMappingOfIpAndHost() {
+	onceConf.Do(func() {
+		updateMappingOfIpAndHost()
+		go func() {
+			t := time.NewTicker(time.Second * 5)
+			for {
+				select {
+				case <-t.C:
+					updateMappingOfIpAndHost()
+				}
+			}
+		}()
+	})
+}
+
+func GetHostNameFromIp(ipAddr string) string {
+	v, ok := mappingOfIpAndHost.Load(ipAddr)
+	if !ok {
+		return ""
+	}
+	return v.(string)
+}
+
+func updateMappingOfIpAndHost() {
+	hostsPath := "/etc/hosts"
+	fd, err := ioutil.ReadFile(hostsPath)
+	if err != nil {
+		log.Logger.Errorf("cannot read from /etc/hosts, err is: %v", err)
+		return
+	}
+	entries := strings.Split(string(fd), "\n")
+	for _, entry := range entries {
+		if strings.HasSuffix(entry, "peer.com") {
+			trimmedEntry := strings.Replace(entry, " ", "", strings.Count(entry, " ")-1)
+			ipAndHost := strings.Split(trimmedEntry, " ")
+			if len(ipAndHost) == 1 {
+				log.Logger.Errorf("this entry: %v should contain at least one space, skip it", entry)
+				continue
+			}
+			mappingOfIpAndHost.Store(ipAndHost[0], ipAndHost[1])
+		}
+	}
+}
+
 // cacheConfiguration caches common package scoped variables
 func cacheConfiguration() {
 	if !configurationCached {
-		tlsEnabled = viper.GetBool("peer.tls.enabled")
+		tlsEnabled = conf.V.TLS.Enabled
 		configurationCached = true
 	}
 }
