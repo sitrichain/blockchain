@@ -1,0 +1,13 @@
+# Copyright Greg Haskins All Rights Reserved
+#
+# SPDX-License-Identifier: Apache-2.0
+#
+FROM _BASE_NS_/blockchain-runenv:_BASE_TAG_
+COPY payload/signEnv.so /usr/lib
+COPY payload/light /usr/local/bin
+COPY payload/docker-entrypoint.sh /docker-entrypoint.sh
+RUN mkdir -p /etc/rongzer/blockchain && \
+    mkdir -p /var/rongzer/production
+ADD  payload/sampleconfig.tar.bz2 /etc/rongzer/blockchain
+ENV BLOCKCHAIN_CFG_PATH /etc/rongzer/blockchain
+CMD ["peer","node","start"]

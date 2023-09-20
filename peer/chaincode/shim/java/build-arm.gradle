@@ -1,0 +1,202 @@
+/*
+Copyright DTCC, IBM 2016, 2017 All Rights Reserved.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+         http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
+buildscript {
+    repositories {
+        mavenLocal()
+		maven { url "http://maven.aliyun.com/nexus/content/groups/public" }
+        mavenCentral()
+        jcenter()
+    }
+    dependencies {
+        classpath 'com.google.protobuf:protobuf-gradle-plugin:0.8.0'
+    }
+}
+
+plugins {
+    id "java"
+    id "com.google.protobuf" version "0.8.0"
+    id "eclipse"
+    id "maven-publish"
+
+}
+archivesBaseName = 'shim-client'
+version = '1.0'
+
+
+sourceSets {
+    main {
+        java {
+            srcDir 'src/main/java'
+        }
+        proto {
+            srcDir 'src/main/proto'
+        }
+    }
+}
+
+repositories {
+    mavenLocal()
+	maven { url "http://maven.aliyun.com/nexus/content/groups/public" }
+    mavenCentral()
+}
+
+apply plugin: "com.google.osdetector"
+
+def tcnative_classifier = osdetector.classifier;
+
+protobuf {
+    generatedFilesBaseDir = "$projectDir/src"
+    protoc {
+        artifact = 'com.google.protobuf:protoc:3.5.1'
+    }
+    plugins {
+        grpc {
+            //artifact = 'io.grpc:protoc-gen-grpc-java:1.10.0'
+            path='/root/protoc-gen-grpc-java'
+        }
+    }
+    generateProtoTasks {
+        all().each { task ->
+            task.builtins {
+                java {
+                    outputSubDir = 'java'
+                }
+            }
+            task.plugins {
+                grpc {
+                outputSubDir = 'java'
+                }
+            }
+        }
+    }
+}
+
+task copyToLib(type: Copy) {
+    into "$buildDir/libs"
+    from configurations.runtime
+}
+
+
+task copyProtos(type:Copy){
+    into "peer", {
+        from ("${rootDir}/protos/peer"){
+            include 'chaincode_event.proto'
+            include 'chaincode.proto'
+            include 'chaincode_shim.proto'
+            include 'proposal.proto'
+            include 'proposal_response.proto'
+        }
+    }
+    into "common", {
+        from ("${rootDir}/protos/common"){
+            include 'common.proto'
+        }
+    }
+    into "ledger/queryresult", {
+        from ("${rootDir}/protos/ledger/queryresult"){
+            include 'kv_query_result.proto'
+        }
+    }
+    into "msp", {
+        from ("../../../../protos/msp"){
+            include 'identities.proto'
+        }
+    }
+    into "${projectDir}/src/main/proto"
+}
+
+task copyProtosFromDevEnv(type:Copy){
+    into "peer", {
+        from ("../../../../protos/peer"){
+            include 'chaincode_event.proto'
+            include 'chaincode.proto'
+            include 'chaincode_shim.proto'
+            include 'proposal.proto'
+            include 'proposal_response.proto'
+        }
+    }
+    into "common", {
+        from ("../../../../protos/common"){
+            include 'common.proto'
+        }
+    }
+    into "ledger/queryresult", {
+        from ("../../../../protos/ledger/queryresult"){
+            include 'kv_query_result.proto'
+        }
+    }
+    into "msp", {
+        from ("../../../../protos/msp"){
+            include 'identities.proto'
+        }
+    }
+    into "${projectDir}/protos"
+}
+
+tasks['build'].mustRunAfter tasks['copyProtos']
+build.dependsOn(copyProtos)
+build.finalizedBy(copyToLib)
+build.finalizedBy(publishToMavenLocal)
+
+dependencies {
+    compile 'com.google.protobuf:protobuf-java:3.5.1'
+    compile 'com.google.protobuf:protobuf-java-util:3.5.1'
+compile 'commons-io:commons-io:2.4'
+compile 'commons-logging:commons-logging:1.1.1'
+compile 'log4j:log4j:1.2.16'
+compile 'net.sf.json-lib:json-lib:2.2.3:jdk15'
+compile 'org.apache.httpcomponents:httpclient:4.5.2'
+compile 'org.apache.commons:commons-compress:1.9'
+compile 'org.bouncycastle:bcpkix-jdk15on:1.55'
+compile 'com.drewnoakes:metadata-extractor:2.6.2'
+    compile 'io.grpc:grpc-all:1.15.0'
+    compile 'commons-cli:commons-cli:1.3.1'
+    compile 'io.netty:netty-tcnative-boringssl-static:1.1.33.Fork21'
+    compile 'org.glassfish:javax.json:1.1.0-M1'
+    testCompile 'junit:junit:4.12'
+    testCompile 'org.hamcrest:hamcrest-library:1.3'
+}
+
+task printClasspath {
+    doLast {
+        configurations.testRuntime.each { println it }
+    }
+}
+
+jar.doFirst {
+    manifest {
+        attributes (
+        'Main-Class': "com.rongzer.chaincode.base.ChaincodeDoor",
+        'Class-Path': configurations.runtime.collect {"$it.name" }.join(' ')
+        )
+    }
+}
+
+publishing {
+   publications {
+       mavenJava(MavenPublication) {
+           groupId 'org.hyperledger'
+           artifactId 'shim-client'
+           version '1.0'
+           from components.java
+       }
+   }
+}
+
+tasks.withType(JavaCompile) {
+    options.encoding = "UTF-8"
+}

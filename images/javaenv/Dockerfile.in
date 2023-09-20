@@ -1,0 +1,25 @@
+# Copyright Greg Haskins All Rights Reserved
+#
+# SPDX-License-Identifier: Apache-2.0
+#
+FROM openjdk:8
+WORKDIR /root
+
+ADD payload/gradle-2.12-bin.zip /tmp
+ADD payload/apache-maven-3.3.9-bin.tar.gz /tmp
+RUN unzip -qo /tmp/gradle-2.12-bin.zip -d /opt && \
+    rm /tmp/gradle-2.12-bin.zip && \
+    ln -s /opt/gradle-2.12/bin/gradle /usr/bin && \
+    mkdir -p /usr/share/maven /usr/share/maven/ref && \
+    cp -rp /tmp/apache-maven-3.3.9/* /usr/share/maven/ && \
+    ln -s /usr/share/maven/bin/mvn /usr/bin/mvn
+ADD payload/javashim.tar.bz2 /root
+ADD payload/protos.tar.bz2 /root
+ADD payload/settings.gradle /root
+ADD payload/protoc-gen-grpc-java /root
+ENV MAVEN_VERSION=3.3.9
+ENV USER_HOME_DIR="/root"
+ENV MAVEN_HOME /usr/share/maven
+ENV MAVEN_CONFIG "$USER_HOME_DIR/.m2"
+# Build java shim after copying proto files from fabric/proto
+RUN /root/peer/chaincode/shim/java/javabuild.sh

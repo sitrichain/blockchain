@@ -1,0 +1,89 @@
+/*
+Copyright IBM Corp. 2016 All Rights Reserved.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+                 http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
+syntax = "proto3";
+
+import "google/protobuf/timestamp.proto";
+import "common/ledger.proto";
+
+option go_package = "github.com/rongzer/blockchain/protos/common";
+option java_package = "com.rongzer.blockchain.protos.common";
+
+package common;
+
+message RListHeight {
+    repeated string ids = 1; //此高度的列表数据
+    uint64 nextHeight = 2; //存在数据的下一个高度
+}
+
+message RBCMessage {
+    int32 type = 1; //消息类型，0：通道初始化，1：查询块信息，3：Peer接收背书消息，4：Orderer接收背书消息，5：Peer接收分发的背书消息,6:背书失败消息，7:接收Orderer过来的交易通知,11:发送节点状态，12：获得节点列表，21:发送HTTP请求,
+    bytes data = 2; //消息数据
+    string chainID = 3; //通道
+    string txID = 4; //通道
+    string extend = 5; //扩展信息
+    bytes creator = 6; //请求者
+    bytes sign = 7; //请求者消息签名
+}
+
+message RBCHttpRequest {
+    string type = 1; //CA,CRYPTO
+    string method = 2; //post,get
+    string endpoint = 3; //地址
+    bytes body = 4; //请求体
+    map<string, string> headers = 5; //消息头，user与secret值作为BaseAuth特殊处理
+    map<string, string> params = 6; //消息参数
+    string extend = 7; //扩展信息
+}
+
+//seek peer info to orderer
+message PeerInfo {
+    string id = 1; // peerid
+    string address = 2; //peer address
+    BlockchainInfo blockInfo = 3; //BlockchainInfo
+    int32 cpu = 4; //cpu percent
+    int32 mem = 5; //mem percent
+    int32 disk = 6; //disk percent
+    google.protobuf.Timestamp seekTime = 7; //last seekTime
+    int32 status = 8;
+    string peerImageId = 9; //peer docker image id
+    string javaenvImageId = 10; //java env docker image id
+    google.protobuf.Timestamp endorserTime = 11; //last endorserTime
+    string channels = 12; //加入的通道数
+}
+
+message PeerList {
+    repeated PeerInfo list = 1;
+}
+
+message BlockStatistics {
+    uint64 number = 1; //区块号
+    google.protobuf.Timestamp blockTime = 2; //blockTime
+    repeated transactionStatistics list = 3; //交易统计列表
+}
+
+message transactionStatistics {
+    string chaincodeId = 1; //合约ID
+    string func = 2; //功能名称
+    string validationCode = 3; //交易验证码
+    string preTxId = 4; //该属性前一交易ID
+    int32 txSum = 5; //交易数
+}
+
+//列表数据
+message ListData {
+    repeated bytes list = 1;
+}
